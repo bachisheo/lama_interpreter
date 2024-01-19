@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include <stdint.h>
 
 #include "../lama-v1.20/runtime/runtime.h"
@@ -9,13 +10,12 @@ void* __stop_custom_data;
 
 // dont have access to runtime, define with `extern`
 extern int Lread();
-
-#define ASSERT_TRUE(condition, msg, ...)         \
-    do                                           \
-        \                                                          
-    if (!(condition)) failure(msg, __VA_ARGS__); \
-    \                              
-  while (0)
+extern int Lwrite(int n);
+#define EXPAND_VA_ARGS(...) , #__VA_ARGS__
+#define ASSERT_TRUE(condition, msg, ...)              \
+    do                                                \
+        if (!(condition)) failure(msg, #__VA_ARGS__); \
+    while (0)
 
 // 1 MB like in JVM by default + memory for globals
 #define STACK_SIZE (1 << 20)
@@ -25,6 +25,9 @@ extern int Lread();
 static int32_t gc_handled_memory[MEM_SIZE];
 // area for call stack
 static int32_t call_stack[STACK_SIZE];
+
+const char* pats[] = {"=str", "#string", "#array", "#sexp",
+                      "#ref", "#val",    "#fun"};
 
 /* The unpacked representation of bytecode file */
 typedef struct {
@@ -102,47 +105,59 @@ addr* call_stack_top;
 addr* bp;
 // gc handled memory top
 // and operands stack top
-extern addr* __gc_stack_top;
+extern size_t __gc_stack_top;
 // gc handled memory bottom
-extern addr* __gc_stack_bottom;
+extern size_t __gc_stack_bottom;
 // operands stack bottom
-// and start of  globals area 
+// and start of  globals area
 addr* op_stack_bottom;
+// globals area start
+addr* globals;
 
 int nArgs;
 int nLocals;
 
-void push(addr* stack_top, addr* stack_limit, addr value, char* msg) {
-    stack_top--;
-    ASSERT_TRUE(stack_top != stack_limit, "\n%s stack overflow", msg);
-    *stack_top = value;
+// get operands stack top
+static inline addr* sp() { return (addr*)__gc_stack_top; }
+
+static inline void move_sp(int delta) {
+    __gc_stack_top = (size_t)(sp() + delta);
 }
 
 void push_op(addr value) {
-    push(__gc_stack_top, gc_handled_memory, value, "Operands");
+    *sp() = value;
+    move_sp(-1);
+    ASSERT_TRUE(sp() != gc_handled_memory, "\nOperands stack overflow");
 }
 
-void push_call(addr value) { push(call_stack_top, call_stack, value, "Call"); }
-
-addr pop(addr* stack_top, addr* stack_bottom, char* msg) {
-    ASSERT_TRUE(stack_top != stack_bottom, "\nAccess to empty %s stack", msg);
-    return *(stack_top++);
+void push_call(addr value) {
+    *call_stack_top = value;
+    call_stack_top--;
+    ASSERT_TRUE(call_stack_top != call_stack, "\nCall stack overflow");
 }
 
-addr pop_op() { return pop(__gc_stack_top, __gc_stack_bottom, "operands"); }
+addr pop_op() {
+    ASSERT_TRUE(sp() != (addr*)__gc_stack_bottom,
+                "\nAccess to empty operands stack");
+    move_sp(1);
+    return *sp();
+}
 
-addr pop_call() { return pop(call_stack_top, call_stack_bottom, "calls"); }
+addr seek_op() { return *(sp() + 1); }
 
-addr* stack() { return __gc_stack_top; }
-
-addr* cstack() { return call_stack_top; }
+addr pop_call() {
+    ASSERT_TRUE(call_stack_top != call_stack_bottom,
+                "\nAccess to empty call stack");
+    call_stack_top++;
+    return *call_stack_top;
+}
 
 void begin(int nLocs, int nArgs) {
     // save frame pointer of callee function
     push_call((addr)bp);
     push_call(nArgs);
     push_call(nLocs);
-    bp = stack();
+    bp = sp();
 
     addr value = BOX(0);
     for (int i = 0; i < nLocs; i++) {
@@ -151,18 +166,107 @@ void begin(int nLocs, int nArgs) {
 }
 
 void init(addr global_area_size) {
-    __gc_stack_bottom = gc_handled_memory + MEM_SIZE;
-    op_stack_bottom = __gc_stack_bottom - global_area_size;
-    __gc_stack_top = op_stack_bottom;
+    __gc_stack_bottom = (size_t)gc_handled_memory + MEM_SIZE;
+    op_stack_bottom = (addr*)__gc_stack_bottom - global_area_size;
+    __gc_stack_top = (size_t)op_stack_bottom;
+    globals = op_stack_bottom;
+    globals++;
 
     call_stack_bottom = call_stack + STACK_SIZE;
     call_stack_top = call_stack_bottom;
 }
-
-void loads(int cmd, int place, int idx){
-
+enum { G, L, A, C };
+void LD(addr place, int idx) {
+    switch (place) {
+        case G: {
+            addr value = globals[idx];
+            push_op(globals[idx]);
+            break;
+        }
+        case L:
+        case A:
+        case C:
+        default:
+            failure("Unknown place for LD");
+    }
 }
 
+void LDA(addr place, int idx) {
+    switch (place) {
+        case G:
+        case L:
+        case A:
+        case C:
+        default:
+            failure("Unknown place for LDA");
+    }
+}
+
+void ST(addr place, int idx) {
+    switch (place) {
+        case G: {
+            addr value = seek_op();
+            globals[idx] = value;
+            break;
+        }
+        case L:
+        case A:
+        case C:
+        default:
+            failure("Unknown place for ST");
+    }
+}
+//"+", "-", "*", "/", "%", "<", "<=", ">", ">=", "==", "!=", "&&", "!!"
+void binop(int32_t operator_code) {
+    int32_t b = pop_op(), a = pop_op();
+    a = UNBOX(a), b = UNBOX(b);
+    int32_t result = 0;
+    switch (operator_code) {
+        case (0):
+            result = a + b;
+            break;
+        case (1):
+            result = a - b;
+            break;
+        case (2):
+            result = a * b;
+            break;
+        case (3):
+            result = a / b;
+            break;
+        case (4):
+            result = a % b;
+            break;
+        case (5):
+            result = a < b;
+            break;
+        case (6):
+            result = a <= b;
+            break;
+        case (7):
+            result = a > b;
+            break;
+        case (8):
+            result = a >= b;
+            break;
+        case (9):
+            result = a == b;
+            break;
+        case (10):
+            result = a != b;
+            break;
+        case (11):
+            result = a && b;
+            break;
+        case (12):
+            result = a || b;
+            break;
+        default:
+            failure("Unknown binop operand code: %d", operator_code);
+    }
+    result = BOX(result);
+    push_op(result);
+}
 void interpret(FILE* f, bytefile* bf) {
 #define INT (ip += sizeof(int), *(int*)(ip - sizeof(int)))
 #define BYTE *ip++
@@ -172,11 +276,7 @@ void interpret(FILE* f, bytefile* bf) {
     init(bf->global_area_size);
 
     char* ip = bf->code_ptr;
-    char* ops[] = {
-        "+", "-", "*", "/", "%", "<", "<=", ">", ">=", "==", "!=", "&&", "!!"};
-    char* pats[] = {"=str", "#string", "#array", "#sexp",
-                    "#ref", "#val",    "#fun"};
-    char* lds[] = {"LD", "LDA", "ST"};
+
     do {
         // read next byte
         char x = BYTE, h = (x & 0xF0) >> 4, l = x & 0x0F;
@@ -187,13 +287,13 @@ void interpret(FILE* f, bytefile* bf) {
 
             /* BINOP */
             case 0:
-                failure("\nDont implement for BINOP\t%s", ops[l - 1]);
+                binop(l - 1);
                 break;
 
             case 1:
                 switch (l) {
                     case 0:
-                        failure("\nDont implement for CONST\t%d", INT);
+                        push_op(BOX(INT));
                         break;
 
                     case 1:
@@ -218,7 +318,7 @@ void interpret(FILE* f, bytefile* bf) {
                         break;
 
                     case 6:
-                        failure("\nDont implement for END");
+                        // failure("\nDont implement for END");
                         break;
 
                     case 7:
@@ -226,7 +326,8 @@ void interpret(FILE* f, bytefile* bf) {
                         break;
 
                     case 8:
-                        failure("\nDont implement for DROP");
+                        // DROP
+                        pop_op();
                         break;
 
                     case 9:
@@ -247,25 +348,15 @@ void interpret(FILE* f, bytefile* bf) {
                 break;
 
             case 2:
-            case 3:
-            case 4:
-                switch (l) {
-                    case 0:
-                        failure("\nDont implement for %s G(%d)",lds[h - 2], INT);
-                        break;
-                    case 1:
-                        failure("\nDont implement for %s L(%d)",lds[h - 2], INT);
-                        break;
-                    case 2:
-                        failure("\nDont implement for %s A(%d)",lds[h - 2], INT);
-                        break;
-                    case 3:
-                        failure("\nDont implement for %s C(%d)",lds[h - 2], INT);
-                        break;
-                    default:
-                        FAIL;
-                }
+                LD(l, INT);
                 break;
+            case 3:
+                LDA(l, INT);
+                break;
+            case 4: {
+                ST(l, INT);
+                break;
+            }
 
             case 5:
                 switch (l) {
@@ -354,12 +445,17 @@ void interpret(FILE* f, bytefile* bf) {
 
             case 7: {
                 switch (l) {
-                    case 0:
-                        push_op(Lread());
+                    case 0: {
+                         addr value = Lread();
+                        push_op(value);
                         break;
-                    case 1:
-                        failure("\nDont implement for CALL\tLwrite");
-                        break;
+                    }
+
+                    case 1: {
+                        addr value = pop_op();
+                        value = Lwrite(value);
+                        push_op(value);
+                    } break;
 
                     case 2:
                         failure("\nDont implement for CALL\tLlength");
@@ -383,7 +479,7 @@ void interpret(FILE* f, bytefile* bf) {
         }
     } while (1);
 stop:
-    failure("\nDont implement for <end>\n");
+    return;
 }
 
 int main(int argc, char* argv[]) {
