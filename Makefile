@@ -49,10 +49,9 @@ clean:
 	$(MAKE) -C lama-v1.20/runtime clean 
 	$(MAKE) -C lama-v1.20/regression clean 
 
-#######!!!!!!! for testing 
-byterun: 
+bc: 
 	$(MAKE) -C lama-v1.20/byterun  
 
-run_test: byterun $(TARGET)
-	./lama-v1.20/byterun/byterun test001.bc 
-	./build/$(TARGET) test001.bc
+test: $(TARGET)
+	$(MAKE) -C lama-v1.20/regression  
+
