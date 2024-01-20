@@ -1,8 +1,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "../lama-v1.20/runtime/runtime.h"
 #include "../lama-v1.20/runtime/gc.h"
+#include "../lama-v1.20/runtime/runtime.h"
 #include "../lama-v1.20/runtime/runtime_common.h"
 
 // variables needed for gc linkage
@@ -16,11 +16,15 @@ extern void* Bstring(void* p);
 extern int Llength(void* p);
 extern void* Belem(void* p, int i);
 extern void* Bsta(void* v, int i, void* x);
+extern int LtagHash(char*);
+extern int Btag(void* d, int t, int n);
 
 #define ASSERT_TRUE(condition, msg, ...)                    \
     do                                                      \
         if (!(condition)) failure("\n" msg, ##__VA_ARGS__); \
     while (0)
+
+#define STRING get_string(bf, next_int())
 
 // 1 MB like in JVM by default + memory for globals
 #define STACK_SIZE (1 << 20)
@@ -234,6 +238,16 @@ static inline void end() {
     }
 }
 
+void tag(void) {
+    // for pattern matching: check
+    // that sexp has given tag and fields count
+    char* tag = STRING;
+    int32_t n_field = next_int();
+    int32_t sexp = pop_op();
+    int32_t tag_hash = LtagHash(tag);
+    push_op(Btag((void*)sexp, tag_hash, BOX(n_field)));
+}
+
 enum { G, L, A, C };
 addr* get_addr(addr place, addr idx) {
     ASSERT_TRUE(idx >= 0, "Index less than zero!!");
@@ -334,23 +348,45 @@ void binop(int32_t operator_code) {
     push_op(result);
 }
 
-//copy logic from `Barray` in runtime.c
-static inline void call_barray() {
+// copy logic from `Barray` in runtime.c
+static inline void call_barray(void) {
     int i, ai;
     data* r;
     int n = next_int();
 
     r = (data*)alloc_array(n);
 
-    for (i = n-1; i >= 0; i--) {
+    for (i = n - 1; i >= 0; i--) {
         ai = pop_op();
         ((int*)r->contents)[i] = ai;
     }
     push_op((int32_t)r->contents);
 }
 
+//usually original method Bsexp 
+//called with args <fileds numbers + 1>
+//so don't need create field `fields_count`
+static inline void call_bsexp(void) {
+    int i;
+    int ai;
+    size_t* p;
+    data* r;
+    char* tag = STRING;
+    int n = next_int();
+    r = (data*)alloc_sexp(n);
+    ((sexp*)r)->tag = 0;
+
+    for (i = n - 1; i >= 1; i--) {
+        ai = pop_op();
+        ((int*)r->contents)[i] = ai;
+    }
+
+    ((sexp*)r)->tag = UNBOX(LtagHash(tag));
+
+    push_op((int32_t)r->contents);
+}
+
 void interpret(FILE* f) {
-#define STRING get_string(bf, next_int())
 #define FAIL failure("ERROR: invalid opcode %d-%d\n", h, l)
 
     init(bf->global_area_size);
@@ -383,8 +419,7 @@ void interpret(FILE* f) {
                     }
 
                     case 2:
-                        failure("\nDont implement for SEXP\t%s ", STRING);
-                        failure("\nDont implement for %d", next_int());
+                        call_bsexp();
                         break;
 
                     case 3:
@@ -419,7 +454,8 @@ void interpret(FILE* f) {
                         break;
 
                     case 9:
-                        failure("\nDont implement for DUP");
+                        // DUP
+                        push_op(peek_op());
                         break;
 
                     case 10:
@@ -514,8 +550,7 @@ void interpret(FILE* f) {
                         call();
                         break;
                     case 7:
-                        failure("\nDont implement for TAG\t%s ", STRING);
-                        failure("\nDont implement for %d", next_int());
+                        tag();
                         break;
 
                     case 8:
