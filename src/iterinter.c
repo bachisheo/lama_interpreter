@@ -5,15 +5,20 @@
 #include "../lama-v1.20/runtime/runtime_common.h"
 
 // variables needed for gc linkage
-void* __start_custom_data;
-void* __stop_custom_data;
+void* __start_custom_data = 0;
+void* __stop_custom_data = 0;
 
 // dont have access to runtime, define with `extern`
 extern int Lread();
 extern int Lwrite(int n);
-#define ASSERT_TRUE(condition, msg, ...)               \
-    do                                                 \
-        if (!(condition)) failure(msg, ##__VA_ARGS__); \
+extern void* Bstring(void* p);
+extern int Llength(void* p);
+extern void* Belem(void* p, int i);
+extern void* Bsta(void* v, int i, void* x);
+
+#define ASSERT_TRUE(condition, msg, ...)                    \
+    do                                                      \
+        if (!(condition)) failure("\n" msg, ##__VA_ARGS__); \
     while (0)
 
 // 1 MB like in JVM by default + memory for globals
@@ -28,6 +33,7 @@ static int32_t call_stack[STACK_SIZE];
 // end of bytefile
 unsigned char* eof;
 
+const int32_t EMPTY_BOX = BOX(0);
 const char* pats[] = {"=str", "#string", "#array", "#sexp",
                       "#ref", "#val",    "#fun"};
 
@@ -44,7 +50,11 @@ typedef struct {
 } bytefile;
 
 /* Gets a string from a string table by an index */
-char* get_string(bytefile* f, int pos) { return &f->string_ptr[pos]; }
+char* get_string(bytefile* f, int pos) {
+    ASSERT_TRUE(pos >= 0 && pos < f->stringtab_size,
+                "Index out of string pool!");
+    return &f->string_ptr[pos];
+}
 
 /* Gets a name for a public symbol */
 char* get_public_name(bytefile* f, int i) {
@@ -155,12 +165,19 @@ addr pop_call() {
 }
 
 void init(addr global_area_size) {
+    // init GC heap, otherwise GC will fail (all heap pointers are 0)
+    __init();
     __gc_stack_bottom = (size_t)gc_handled_memory + MEM_SIZE;
     globals = (addr*)__gc_stack_bottom - global_area_size;
     __gc_stack_top = (size_t)(globals - 1);
 
     call_stack_bottom = call_stack + STACK_SIZE;
     call_stack_top = call_stack_bottom - 1;
+
+    // set boxed values in global area memory
+    for (int i = 0; i < global_area_size; i++) {
+        globals[i] = EMPTY_BOX;
+    }
 }
 
 void update_ip(unsigned char* new_ip) {
@@ -251,6 +268,19 @@ void ST(addr place_type, int idx) {
     addr* place = get_addr(place_type, idx);
     *place = value;
 }
+
+void STA() {
+    int32_t value = pop_op();
+    int32_t dest = pop_op();
+    if (UNBOXED(dest)) {
+        int32_t array = pop_op();
+        Bsta((void*)value, dest, (void*)array);
+    } else {
+        *(int32_t*)dest = value;
+    }
+    push_op(value);
+}
+
 //"+", "-", "*", "/", "%", "<", "<=", ">", ">=", "==", "!=", "&&", "!!"
 void binop(int32_t operator_code) {
     int32_t b = pop_op(), a = pop_op();
@@ -330,9 +360,11 @@ void interpret(FILE* f) {
                         push_op(BOX(next_int()));
                         break;
 
-                    case 1:
-                        failure("\nDont implement for STRING\t%s", STRING);
+                    case 1: {
+                        char* string_in_pool = STRING;
+                        push_op((int32_t)Bstring(string_in_pool));
                         break;
+                    }
 
                     case 2:
                         failure("\nDont implement for SEXP\t%s ", STRING);
@@ -344,7 +376,7 @@ void interpret(FILE* f) {
                         break;
 
                     case 4:
-                        failure("\nDont implement for STA");
+                        STA();
                         break;
 
                     case 5:
@@ -378,10 +410,12 @@ void interpret(FILE* f) {
                         failure("\nDont implement for SWAP");
                         break;
 
-                    case 11:
-                        failure("\nDont implement for ELEM");
+                    case 11: {
+                        int32_t idx = pop_op();
+                        int32_t array = pop_op();
+                        push_op((int32_t)Belem((char*)array, idx));
                         break;
-
+                    }
                     default:
                         FAIL;
                 }
@@ -494,6 +528,7 @@ void interpret(FILE* f) {
             case 7: {
                 switch (l) {
                     case 0: {
+                        // read make it BOX
                         addr value = Lread();
                         push_op(value);
                         break;
@@ -506,7 +541,7 @@ void interpret(FILE* f) {
                     } break;
 
                     case 2:
-                        failure("\nDont implement for CALL\tLlength");
+                        push_op(Llength((char*)pop_op()));
                         break;
 
                     case 3:

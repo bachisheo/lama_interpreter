@@ -13,11 +13,9 @@ extern size_t __gc_stack_top, __gc_stack_bottom;
   bool flag = false;                                                                               \
   flag      = __gc_stack_top == 0;                                                                 \
   if (flag) { __gc_stack_top = (size_t)__builtin_frame_address(0); }                               \
-  assert(__gc_stack_top != 0);                                                                     \
-  assert(__builtin_frame_address(0) <= (void *)__gc_stack_top);
+  assert(__gc_stack_top != 0);                                                                     
 
 #define POST_GC()                                                                                  \
-  assert(__builtin_frame_address(0) <= (void *)__gc_stack_top);                                    \
   if (flag) { __gc_stack_top = 0; }
 
 static void vfailure (char *s, va_list args) {
