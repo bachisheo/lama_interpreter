@@ -112,8 +112,6 @@ extern size_t __gc_stack_top;
 extern size_t __gc_stack_bottom;
 // operands stack bottom
 // and start of  globals area
-addr* op_stack_bottom;
-// globals area start
 addr* globals;
 // bytefile info
 bytefile* bf;
@@ -156,6 +154,39 @@ addr pop_call() {
     return *call_stack_top;
 }
 
+void init(addr global_area_size) {
+    __gc_stack_bottom = (size_t)gc_handled_memory + MEM_SIZE;
+    globals = (addr*)__gc_stack_bottom - global_area_size;
+    __gc_stack_top = (size_t)(globals - 1);
+
+    call_stack_bottom = call_stack + STACK_SIZE;
+    call_stack_top = call_stack_bottom - 1;
+}
+
+void update_ip(unsigned char* new_ip) {
+    ASSERT_TRUE(new_ip >= bf->code_ptr && new_ip < eof,
+                "IP points out of bytecode area!");
+    ip = new_ip;
+}
+
+inline static unsigned char next_byte() {
+    ASSERT_TRUE(ip + 1 < eof, "IP points out of bytecode area!");
+    return *ip++;
+}
+
+inline static int32_t next_int() {
+    ASSERT_TRUE(ip + sizeof(int) < eof, "IP points out of bytecode area!");
+    return (ip += sizeof(int), *(int*)(ip - sizeof(int)));
+}
+
+inline static void call() {
+    int32_t func_label = next_int();
+    int32_t n_args = next_int();
+
+    push_call((addr)ip);  // return address
+    update_ip(bf->code_ptr + func_label);
+}
+
 void begin(int new_n_locs, int new_n_args) {
     // save frame pointer of callee function
     push_call((addr)fp);
@@ -170,15 +201,21 @@ void begin(int new_n_locs, int new_n_args) {
     }
 }
 
-void init(addr global_area_size) {
-    __gc_stack_bottom = (size_t)gc_handled_memory + MEM_SIZE;
-    op_stack_bottom = (addr*)__gc_stack_bottom - global_area_size;
-    __gc_stack_top = (size_t)(op_stack_bottom - 1);
-    globals = op_stack_bottom;
+#define IS_MAIN (call_stack_top == call_stack_bottom - 1)
+static inline void end() {
+    addr return_val = pop_op();
+    move_sp(n_args + n_locals);
+    push_op(return_val);
 
-    call_stack_bottom = call_stack + STACK_SIZE;
-    call_stack_top = call_stack_bottom - 1;
+    n_locals = pop_call();   // locs_n
+    n_args = pop_call();     // args_n
+    fp = (addr*)pop_call();  // fp
+
+    if (call_stack_top != call_stack_bottom - 1) {
+        ip = (unsigned char*)pop_call();  // ret addr
+    }
 }
+
 enum { G, L, A, C };
 addr* get_addr(addr place, addr idx) {
     ASSERT_TRUE(idx >= 0, "Index less than zero!!");
@@ -190,8 +227,9 @@ addr* get_addr(addr place, addr idx) {
         case L:
             ASSERT_TRUE(idx < n_locals, "Operands stack overflow!");
             return fp - idx;
-            break;
         case A:
+            ASSERT_TRUE(idx < n_args, "Arguments overflow!");
+            return fp + idx + 1;
         case C:
         default:
             failure("Unknown place %d", place);
@@ -264,21 +302,6 @@ void binop(int32_t operator_code) {
     result = BOX(result);
     push_op(result);
 }
-void update_ip(unsigned char* new_ip) {
-    ASSERT_TRUE(new_ip >= bf->code_ptr && new_ip < eof,
-                "IP points out of bytecode area!");
-    ip = new_ip;
-}
-
-inline static unsigned char next_byte() {
-    ASSERT_TRUE(ip + 1 < eof, "IP points out of bytecode area!");
-    return *ip++;
-}
-
-inline static int32_t next_int() {
-    ASSERT_TRUE(ip + sizeof(int) < eof, "IP points out of bytecode area!");
-    return (ip += sizeof(int), *(int*)(ip - sizeof(int)));
-}
 
 void interpret(FILE* f) {
 #define STRING get_string(bf, next_int())
@@ -303,7 +326,7 @@ void interpret(FILE* f) {
 
             case 1:
                 switch (l) {
-                    case 0: // CONST
+                    case 0:  // CONST
                         push_op(BOX(next_int()));
                         break;
 
@@ -332,19 +355,12 @@ void interpret(FILE* f) {
                             break;
                         }
 
-                    case 6: {
-                        // END
-                        int32_t old_fp = pop_call();  // fp
-                        pop_call();                   // locs_n
-                        pop_call();                   // args_n
-                        if (call_stack_top == call_stack_bottom - 1) {
+                    case 6:
+                        end();
+                        if (IS_MAIN) {
                             return;
                         }
-                        pop_call();  // ret addr
-
                         break;
-                    }
-
                     case 7:
                         failure("\nDont implement for RET");
                         break;
@@ -384,20 +400,21 @@ void interpret(FILE* f) {
 
             case 5:
                 switch (l) {
-                    case 0:
-                        failure("\nDont implement for CJMPz\t0x%.8x",
-                                next_int());
-                        break;
-
-                    case 1:
-                        // CJMPnz
-                        {
-                            int x = next_int();
-                            if (UNBOX(pop_op())) {
-                                update_ip(bf->code_ptr + x);
-                            }
+                    case 0: {  // CJMPz
+                        int x = next_int();
+                        if (!UNBOX(pop_op())) {
+                            update_ip(bf->code_ptr + x);
                         }
                         break;
+                    }
+
+                    case 1: {  // CJMPnz
+                        int x = next_int();
+                        if (UNBOX(pop_op())) {
+                            update_ip(bf->code_ptr + x);
+                        }
+                        break;
+                    }
 
                     case 2: {
                         int n_args = next_int();
@@ -440,17 +457,12 @@ void interpret(FILE* f) {
                             }
                         };
                         break;
-
                     case 5:
                         failure("\nDont implement for CALLC\t%d", next_int());
                         break;
-
                     case 6:
-                        failure("\nDont implement for CALL\t0x%.8x ",
-                                next_int());
-                        failure("\nDont implement for %d", next_int());
+                        call();
                         break;
-
                     case 7:
                         failure("\nDont implement for TAG\t%s ", STRING);
                         failure("\nDont implement for %d", next_int());
