@@ -376,7 +376,7 @@ static inline void call_bsexp(void) {
     r = (data*)alloc_sexp(n);
     ((sexp*)r)->tag = 0;
 
-    for (i = n - 1; i >= 1; i--) {
+    for (i = n; i >= 1; i--) {
         ai = pop_op();
         ((int*)r->contents)[i] = ai;
     }
