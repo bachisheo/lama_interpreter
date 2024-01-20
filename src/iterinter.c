@@ -18,6 +18,7 @@ extern void* Belem(void* p, int i);
 extern void* Bsta(void* v, int i, void* x);
 extern int LtagHash(char*);
 extern int Btag(void* d, int t, int n);
+extern void *Lstring (void *p);
 
 #define ASSERT_TRUE(condition, msg, ...)                    \
     do                                                      \
@@ -596,7 +597,7 @@ void interpret(FILE* f) {
                         break;
 
                     case 3:
-                        failure("\nDont implement for CALL\tLstring");
+                        push_op(Lstring((char*)pop_op()));
                         break;
 
                     case 4:
