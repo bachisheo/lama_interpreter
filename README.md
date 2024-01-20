@@ -3,7 +3,10 @@
 Folders `lama-v1.20` with files from Lama repository (v 1.20):
 
 * `runtime` - Lama runtime: GC, helping functions
-* `byterun` - Lama bytecode disassembler. From there, the bytecode representation in C was used 
+* `byterun` - Lama bytecode disassembler. From there, the bytecode representation in C was used. 
+
+ Command: ./lama-v1.20/byterun/byterun lama-v1.20/regression/test009.bc
+
 * `regression` - test for interpreter correctness 
 * `performance` - test on performance 
 

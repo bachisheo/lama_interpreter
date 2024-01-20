@@ -11,10 +11,9 @@ void* __stop_custom_data;
 // dont have access to runtime, define with `extern`
 extern int Lread();
 extern int Lwrite(int n);
-#define EXPAND_VA_ARGS(...) , #__VA_ARGS__
-#define ASSERT_TRUE(condition, msg, ...)              \
-    do                                                \
-        if (!(condition)) failure(msg, #__VA_ARGS__); \
+#define ASSERT_TRUE(condition, msg, ...)               \
+    do                                                 \
+        if (!(condition)) failure(msg, ##__VA_ARGS__); \
     while (0)
 
 // 1 MB like in JVM by default + memory for globals
@@ -25,6 +24,9 @@ extern int Lwrite(int n);
 static int32_t gc_handled_memory[MEM_SIZE];
 // area for call stack
 static int32_t call_stack[STACK_SIZE];
+
+// end of bytefile
+unsigned char* eof;
 
 const char* pats[] = {"=str", "#string", "#array", "#sexp",
                       "#ref", "#val",    "#fun"};
@@ -66,7 +68,9 @@ bytefile* read_file(char* fname) {
         failure("%s\n", strerror(errno));
     }
 
-    file = (bytefile*)malloc(sizeof(int) * 4 + (size = ftell(f)));
+    int file_size = sizeof(int) * 4 + (size = ftell(f));
+    file = (bytefile*)malloc(file_size);
+    eof = (unsigned char*)file + file_size;
 
     if (file == 0) {
         failure("*** FAILURE: unable to allocate memory.\n");
@@ -94,15 +98,13 @@ bytefile* read_file(char* fname) {
 #define byte char
 
 // current instruction pointer
-addr ip;
+unsigned char* ip;
 // address of current stack frame
 addr* fp;
 // call stack
 addr* call_stack_bottom;
 // call stack pointer
 addr* call_stack_top;
-// base pointer ~ frame pointer
-addr* bp;
 // gc handled memory top
 // and operands stack top
 extern size_t __gc_stack_top;
@@ -113,9 +115,11 @@ extern size_t __gc_stack_bottom;
 addr* op_stack_bottom;
 // globals area start
 addr* globals;
+// bytefile info
+bytefile* bf;
 
-int nArgs;
-int nLocals;
+int n_args;
+int n_locals;
 
 // get operands stack top
 static inline addr* sp() { return (addr*)__gc_stack_top; }
@@ -137,30 +141,31 @@ void push_call(addr value) {
 }
 
 addr pop_op() {
-    ASSERT_TRUE(sp() != (addr*)__gc_stack_bottom,
+    ASSERT_TRUE(sp() != (addr*)__gc_stack_bottom - 1,
                 "\nAccess to empty operands stack");
     move_sp(1);
     return *sp();
 }
 
-addr seek_op() { return *(sp() + 1); }
+addr peek_op() { return *(sp() + 1); }
 
 addr pop_call() {
-    ASSERT_TRUE(call_stack_top != call_stack_bottom,
+    ASSERT_TRUE(call_stack_top != call_stack_bottom - 1,
                 "\nAccess to empty call stack");
     call_stack_top++;
     return *call_stack_top;
 }
 
-void begin(int nLocs, int nArgs) {
+void begin(int new_n_locs, int new_n_args) {
     // save frame pointer of callee function
-    push_call((addr)bp);
-    push_call(nArgs);
-    push_call(nLocs);
-    bp = sp();
+    push_call((addr)fp);
+    push_call(n_args);
+    push_call(n_locals);
+    fp = sp();
 
+    n_args = new_n_args, n_locals = new_n_locs;
     addr value = BOX(0);
-    for (int i = 0; i < nLocs; i++) {
+    for (int i = 0; i < new_n_locs; i++) {
         push_op(value);
     }
 }
@@ -168,53 +173,45 @@ void begin(int nLocs, int nArgs) {
 void init(addr global_area_size) {
     __gc_stack_bottom = (size_t)gc_handled_memory + MEM_SIZE;
     op_stack_bottom = (addr*)__gc_stack_bottom - global_area_size;
-    __gc_stack_top = (size_t)op_stack_bottom;
+    __gc_stack_top = (size_t)(op_stack_bottom - 1);
     globals = op_stack_bottom;
-    globals++;
 
     call_stack_bottom = call_stack + STACK_SIZE;
-    call_stack_top = call_stack_bottom;
+    call_stack_top = call_stack_bottom - 1;
 }
 enum { G, L, A, C };
-void LD(addr place, int idx) {
-    switch (place) {
-        case G: {
-            addr value = globals[idx];
-            push_op(globals[idx]);
-            break;
-        }
-        case L:
-        case A:
-        case C:
-        default:
-            failure("Unknown place for LD");
-    }
-}
-
-void LDA(addr place, int idx) {
+addr* get_addr(addr place, addr idx) {
+    ASSERT_TRUE(idx >= 0, "Index less than zero!!");
     switch (place) {
         case G:
+            ASSERT_TRUE(globals + idx < (addr*)__gc_stack_bottom,
+                        "Out of memory (global %d)", idx);
+            return globals + idx;
         case L:
+            ASSERT_TRUE(idx < n_locals, "Operands stack overflow!");
+            return fp - idx;
+            break;
         case A:
         case C:
         default:
-            failure("Unknown place for LDA");
+            failure("Unknown place %d", place);
     }
 }
 
-void ST(addr place, int idx) {
-    switch (place) {
-        case G: {
-            addr value = seek_op();
-            globals[idx] = value;
-            break;
-        }
-        case L:
-        case A:
-        case C:
-        default:
-            failure("Unknown place for ST");
-    }
+void LD(int32_t place_type, int idx) {
+    addr* place = get_addr(place_type, idx);
+    push_op(*place);
+}
+
+void LDA(int32_t place_type, int idx) {
+    addr* place = get_addr(place_type, idx);
+    push_op((int32_t)place);
+}
+
+void ST(addr place_type, int idx) {
+    addr value = peek_op();
+    addr* place = get_addr(place_type, idx);
+    *place = value;
 }
 //"+", "-", "*", "/", "%", "<", "<=", ">", ">=", "==", "!=", "&&", "!!"
 void binop(int32_t operator_code) {
@@ -267,19 +264,33 @@ void binop(int32_t operator_code) {
     result = BOX(result);
     push_op(result);
 }
-void interpret(FILE* f, bytefile* bf) {
-#define INT (ip += sizeof(int), *(int*)(ip - sizeof(int)))
-#define BYTE *ip++
-#define STRING get_string(bf, INT)
+void update_ip(unsigned char* new_ip) {
+    ASSERT_TRUE(new_ip >= bf->code_ptr && new_ip < eof,
+                "IP points out of bytecode area!");
+    ip = new_ip;
+}
+
+inline static unsigned char next_byte() {
+    ASSERT_TRUE(ip + 1 < eof, "IP points out of bytecode area!");
+    return *ip++;
+}
+
+inline static int32_t next_int() {
+    ASSERT_TRUE(ip + sizeof(int) < eof, "IP points out of bytecode area!");
+    return (ip += sizeof(int), *(int*)(ip - sizeof(int)));
+}
+
+void interpret(FILE* f) {
+#define STRING get_string(bf, next_int())
 #define FAIL failure("ERROR: invalid opcode %d-%d\n", h, l)
 
     init(bf->global_area_size);
 
-    char* ip = bf->code_ptr;
+    ip = bf->code_ptr;
 
     do {
         // read next byte
-        char x = BYTE, h = (x & 0xF0) >> 4, l = x & 0x0F;
+        char x = next_byte(), h = (x & 0xF0) >> 4, l = x & 0x0F;
 
         switch (h) {
             case 15:
@@ -292,8 +303,8 @@ void interpret(FILE* f, bytefile* bf) {
 
             case 1:
                 switch (l) {
-                    case 0:
-                        push_op(BOX(INT));
+                    case 0: // CONST
+                        push_op(BOX(next_int()));
                         break;
 
                     case 1:
@@ -302,7 +313,7 @@ void interpret(FILE* f, bytefile* bf) {
 
                     case 2:
                         failure("\nDont implement for SEXP\t%s ", STRING);
-                        failure("\nDont implement for %d", INT);
+                        failure("\nDont implement for %d", next_int());
                         break;
 
                     case 3:
@@ -314,12 +325,25 @@ void interpret(FILE* f, bytefile* bf) {
                         break;
 
                     case 5:
-                        failure("\nDont implement for JMP\t0x%.8x", INT);
-                        break;
+                        // JMP
+                        {
+                            int x = next_int();
+                            update_ip(bf->code_ptr + x);
+                            break;
+                        }
 
-                    case 6:
-                        // failure("\nDont implement for END");
+                    case 6: {
+                        // END
+                        int32_t old_fp = pop_call();  // fp
+                        pop_call();                   // locs_n
+                        pop_call();                   // args_n
+                        if (call_stack_top == call_stack_bottom - 1) {
+                            return;
+                        }
+                        pop_call();  // ret addr
+
                         break;
+                    }
 
                     case 7:
                         failure("\nDont implement for RET");
@@ -348,56 +372,67 @@ void interpret(FILE* f, bytefile* bf) {
                 break;
 
             case 2:
-                LD(l, INT);
+                LD(l, next_int());
                 break;
             case 3:
-                LDA(l, INT);
+                LDA(l, next_int());
                 break;
             case 4: {
-                ST(l, INT);
+                ST(l, next_int());
                 break;
             }
 
             case 5:
                 switch (l) {
                     case 0:
-                        failure("\nDont implement for CJMPz\t0x%.8x", INT);
+                        failure("\nDont implement for CJMPz\t0x%.8x",
+                                next_int());
                         break;
 
                     case 1:
-                        failure("\nDont implement for CJMPnz\t0x%.8x", INT);
+                        // CJMPnz
+                        {
+                            int x = next_int();
+                            if (UNBOX(pop_op())) {
+                                update_ip(bf->code_ptr + x);
+                            }
+                        }
                         break;
 
-                    case 2:
-                        begin(INT, INT);
+                    case 2: {
+                        int n_args = next_int();
+                        int n_locs = next_int();
+                        begin(n_locs, n_args);
                         break;
+                    }
 
                     case 3:
-                        failure("\nDont implement for CBEGIN\t%d ", INT);
-                        failure("\nDont implement for %d", INT);
+                        failure("\nDont implement for CBEGIN\t%d ", next_int());
+                        failure("\nDont implement for %d", next_int());
                         break;
 
                     case 4:
-                        failure("\nDont implement for CLOSURE\t0x%.8x", INT);
+                        failure("\nDont implement for CLOSURE\t0x%.8x",
+                                next_int());
                         {
-                            int n = INT;
+                            int n = next_int();
                             for (int i = 0; i < n; i++) {
-                                switch (BYTE) {
+                                switch (next_byte()) {
                                     case 0:
                                         failure("\nDont implement for G(%d)",
-                                                INT);
+                                                next_int());
                                         break;
                                     case 1:
                                         failure("\nDont implement for L(%d)",
-                                                INT);
+                                                next_int());
                                         break;
                                     case 2:
                                         failure("\nDont implement for A(%d)",
-                                                INT);
+                                                next_int());
                                         break;
                                     case 3:
                                         failure("\nDont implement for C(%d)",
-                                                INT);
+                                                next_int());
                                         break;
                                     default:
                                         FAIL;
@@ -407,31 +442,32 @@ void interpret(FILE* f, bytefile* bf) {
                         break;
 
                     case 5:
-                        failure("\nDont implement for CALLC\t%d", INT);
+                        failure("\nDont implement for CALLC\t%d", next_int());
                         break;
 
                     case 6:
-                        failure("\nDont implement for CALL\t0x%.8x ", INT);
-                        failure("\nDont implement for %d", INT);
+                        failure("\nDont implement for CALL\t0x%.8x ",
+                                next_int());
+                        failure("\nDont implement for %d", next_int());
                         break;
 
                     case 7:
                         failure("\nDont implement for TAG\t%s ", STRING);
-                        failure("\nDont implement for %d", INT);
+                        failure("\nDont implement for %d", next_int());
                         break;
 
                     case 8:
-                        failure("\nDont implement for ARRAY\t%d", INT);
+                        failure("\nDont implement for ARRAY\t%d", next_int());
                         break;
 
                     case 9:
-                        failure("\nDont implement for FAIL\t%d", INT);
-                        failure("\nDont implement for %d", INT);
+                        failure("\nDont implement for FAIL\t%d", next_int());
+                        failure("\nDont implement for %d", next_int());
                         break;
 
                     case 10:
-                        // helper information about source code line
-                        INT;
+                        // LINE -- helper information about source code line
+                        next_int();
                         break;
 
                     default:
@@ -446,7 +482,7 @@ void interpret(FILE* f, bytefile* bf) {
             case 7: {
                 switch (l) {
                     case 0: {
-                         addr value = Lread();
+                        addr value = Lread();
                         push_op(value);
                         break;
                     }
@@ -466,7 +502,8 @@ void interpret(FILE* f, bytefile* bf) {
                         break;
 
                     case 4:
-                        failure("\nDont implement for CALL\tBarray\t%d", INT);
+                        failure("\nDont implement for CALL\tBarray\t%d",
+                                next_int());
                         break;
 
                     default:
@@ -483,7 +520,7 @@ stop:
 }
 
 int main(int argc, char* argv[]) {
-    bytefile* f = read_file(argv[1]);
-    interpret(stdout, f);
+    bf = read_file(argv[1]);
+    interpret(stdout);
     return 0;
 }

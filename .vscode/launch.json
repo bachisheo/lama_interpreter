@@ -9,7 +9,7 @@
             "request": "launch",
             "name": "Debug",
             "program": "${workspaceFolder}/build/iterinter",
-            "args": ["${workspaceFolder}/test001.bc"],
+            "args": ["${workspaceFolder}/lama-v1.20/regression/test001.bc"],
             "cwd": "${workspaceFolder}"
         }
     ]
