@@ -2,6 +2,7 @@
 #include <stdint.h>
 
 #include "../lama-v1.20/runtime/runtime.h"
+#include "../lama-v1.20/runtime/gc.h"
 #include "../lama-v1.20/runtime/runtime_common.h"
 
 // variables needed for gc linkage
@@ -148,7 +149,7 @@ void push_call(addr value) {
     ASSERT_TRUE(call_stack_top != call_stack, "\nCall stack overflow");
 }
 
-addr pop_op() {
+addr pop_op(void) {
     ASSERT_TRUE(sp() != (addr*)__gc_stack_bottom - 1,
                 "\nAccess to empty operands stack");
     move_sp(1);
@@ -331,6 +332,21 @@ void binop(int32_t operator_code) {
     }
     result = BOX(result);
     push_op(result);
+}
+
+//copy logic from `Barray` in runtime.c
+static inline void call_barray() {
+    int i, ai;
+    data* r;
+    int n = next_int();
+
+    r = (data*)alloc_array(n);
+
+    for (i = n-1; i >= 0; i--) {
+        ai = pop_op();
+        ((int*)r->contents)[i] = ai;
+    }
+    push_op((int32_t)r->contents);
 }
 
 void interpret(FILE* f) {
@@ -549,8 +565,7 @@ void interpret(FILE* f) {
                         break;
 
                     case 4:
-                        failure("\nDont implement for CALL\tBarray\t%d",
-                                next_int());
+                        call_barray();
                         break;
 
                     default:
