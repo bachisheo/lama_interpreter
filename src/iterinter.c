@@ -18,11 +18,11 @@ extern void* Belem(void* p, int i);
 extern void* Bsta(void* v, int i, void* x);
 extern int LtagHash(char*);
 extern int Btag(void* d, int t, int n);
-extern void *Lstring (void *p);
+extern void* Lstring(void* p);
 
-#define ASSERT_TRUE(condition, msg, ...)                    \
-    do                                                      \
-        if (!(condition)) failure("\n" msg, ##__VA_ARGS__); \
+#define ASSERT_TRUE(condition, msg, ...)                         \
+    do                                                           \
+        if (!(condition)) failure("\n" msg "\n", ##__VA_ARGS__); \
     while (0)
 
 #define STRING get_string(bf, next_int())
@@ -161,7 +161,7 @@ addr pop_op(void) {
     return *sp();
 }
 
-addr peek_op() { return *(sp() + 1); }
+addr peek_op(void) { return *(sp() + 1); }
 
 addr pop_call() {
     ASSERT_TRUE(call_stack_top != call_stack_bottom - 1,
@@ -187,8 +187,10 @@ void init(addr global_area_size) {
 }
 
 void update_ip(unsigned char* new_ip) {
-    ASSERT_TRUE(new_ip >= bf->code_ptr && new_ip < eof,
-                "IP points out of bytecode area!");
+    ASSERT_TRUE(
+        new_ip >= bf->code_ptr && new_ip < eof,
+        "IP points out of bytecode area! START_CODE: %d, EOF: %d, IP: %d",
+        bf->code_ptr, eof, new_ip);
     ip = new_ip;
 }
 
@@ -202,7 +204,7 @@ inline static int32_t next_int() {
     return (ip += sizeof(int), *(int*)(ip - sizeof(int)));
 }
 
-inline static void call() {
+inline static void call(void) {
     int32_t func_label = next_int();
     int32_t n_args = next_int();
 
@@ -249,6 +251,15 @@ void tag(void) {
     push_op(Btag((void*)sexp, tag_hash, BOX(n_field)));
 }
 
+inline static int32_t get_closure(int32_t* p) {
+    data* closure_obj = TO_DATA(p);
+    data* a = TO_DATA(p);
+    int t = TAG(closure_obj->data_header);
+    ASSERT_TRUE(t == CLOSURE_TAG,
+                "get_closure: pointer to not-closure object as argument");
+    return ((int32_t*)closure_obj->contents)[0];
+}
+
 enum { G, L, A, C };
 addr* get_addr(addr place, addr idx) {
     ASSERT_TRUE(idx >= 0, "Index less than zero!!");
@@ -264,6 +275,7 @@ addr* get_addr(addr place, addr idx) {
             ASSERT_TRUE(idx < n_args, "Arguments overflow!");
             return fp + idx + 1;
         case C:
+
         default:
             failure("Unknown place %d", place);
     }
@@ -297,6 +309,46 @@ void STA() {
     push_op(value);
 }
 
+// expired by function `Bclosure` from runtime.c
+inline static void closure(void) {
+    int i, ai;
+    size_t* argss;
+    data* r;
+
+    void* closure_addr = (void*)next_int();
+    // number of captured by closure variables
+    int32_t n = next_int();
+
+    r = (data*)alloc_closure(n + 1);
+
+    push_extra_root((void**)&r);
+
+    ((void**)r->contents)[0] = closure_addr;
+
+    for (i = 0; i < n; i++) {
+        unsigned char place_type = next_byte();
+        int32_t idx = next_int();
+        addr* place = get_addr(place_type, idx);
+        ai = *place;
+        ((int*)r->contents)[i + 1] = ai;
+    }
+
+    pop_extra_root((void**)&r);
+
+    push_op((int32_t)r->contents);
+}
+
+// CALLC
+inline static void call_closure(void) {
+    int32_t n_args = next_int();
+    // closure addr not in code -- it stored in closure object.
+    // Stack store count of closure arguments and closure object
+    // in 0 field in closure stored address, in other -- captured variables
+    int32_t closure_label = get_closure((int32_t*)sp()[n_args + 1]);
+
+    push_call((addr)ip);  // return address
+    update_ip(bf->code_ptr + (int32_t)closure_label);
+}
 //"+", "-", "*", "/", "%", "<", "<=", ">", ">=", "==", "!=", "&&", "!!"
 void binop(int32_t operator_code) {
     int32_t b = pop_op(), a = pop_op();
@@ -349,7 +401,7 @@ void binop(int32_t operator_code) {
     push_op(result);
 }
 
-// copy logic from `Barray` in runtime.c
+// inspired by `Barray` from runtime.c
 static inline void call_barray(void) {
     int i, ai;
     data* r;
@@ -364,9 +416,9 @@ static inline void call_barray(void) {
     push_op((int32_t)r->contents);
 }
 
-//usually original method Bsexp 
-//called with args <fileds numbers + 1>
-//so don't need create field `fields_count`
+// usually original method Bsexp
+// called with args <fileds numbers + 1>
+// so don't need create field `fields_count`
 static inline void call_bsexp(void) {
     int i;
     int ai;
@@ -516,36 +568,11 @@ void interpret(FILE* f) {
                         break;
 
                     case 4:
-                        failure("\nDont implement for CLOSURE\t0x%.8x",
-                                next_int());
-                        {
-                            int n = next_int();
-                            for (int i = 0; i < n; i++) {
-                                switch (next_byte()) {
-                                    case 0:
-                                        failure("\nDont implement for G(%d)",
-                                                next_int());
-                                        break;
-                                    case 1:
-                                        failure("\nDont implement for L(%d)",
-                                                next_int());
-                                        break;
-                                    case 2:
-                                        failure("\nDont implement for A(%d)",
-                                                next_int());
-                                        break;
-                                    case 3:
-                                        failure("\nDont implement for C(%d)",
-                                                next_int());
-                                        break;
-                                    default:
-                                        FAIL;
-                                }
-                            }
-                        };
+                        closure();
                         break;
+
                     case 5:
-                        failure("\nDont implement for CALLC\t%d", next_int());
+                        call_closure();
                         break;
                     case 6:
                         call();
