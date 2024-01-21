@@ -1,5 +1,6 @@
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "../lama-v1.20/runtime/gc.h"
 #include "../lama-v1.20/runtime/runtime.h"
@@ -19,6 +20,7 @@ extern void* Bsta(void* v, int i, void* x);
 extern int LtagHash(char*);
 extern int Btag(void* d, int t, int n);
 extern void* Lstring(void* p);
+extern int Bclosure_tag_patt(void *x);
 
 #define ASSERT_TRUE(condition, msg, ...)                         \
     do                                                           \
@@ -40,8 +42,6 @@ static int32_t call_stack[STACK_SIZE];
 unsigned char* eof;
 
 const int32_t EMPTY_BOX = BOX(0);
-const char* pats[] = {"=str", "#string", "#array", "#sexp",
-                      "#ref", "#val",    "#fun"};
 
 /* The unpacked representation of bytecode file */
 typedef struct {
@@ -253,7 +253,6 @@ void tag(void) {
 
 inline static int32_t get_closure(int32_t* p) {
     data* closure_obj = TO_DATA(p);
-    data* a = TO_DATA(p);
     int t = TAG(closure_obj->data_header);
     ASSERT_TRUE(t == CLOSURE_TAG,
                 "get_closure: pointer to not-closure object as argument");
@@ -439,7 +438,45 @@ static inline void call_bsexp(void) {
     push_op((int32_t)r->contents);
 }
 
-void interpret(FILE* f) {
+enum { str_literal, string, array, p_sexp, ref, val, fun };
+
+static inline bool check_equals(int32_t obj, int32_t tag) {
+    switch (tag) {
+        // case (string):
+        //     return STRING_TAG;
+        // case (array):
+        //     return ARRAY_TAG;
+        // case (p_sexp):
+        //     return SEXP_TAG;
+        case (fun):
+            if(UNBOXED(obj)) return false;
+            return BOX(TAG(TO_DATA(obj)->data_header) == CLOSURE_TAG);
+        default:
+            failure("There is no tag %d", tag);
+    }
+}
+
+static inline void patt(int32_t patt_type) {
+    int32_t obj = pop_op();
+    bool result = false;
+    switch (patt_type) {
+            // case str_literal:
+            //   result = strcmp((char*)patt_type, (char*)obj);
+            // break;
+        case ref:
+            result = !UNBOXED(obj);
+            break;
+        case val:
+            result = UNBOXED(obj);
+            break;
+
+        default:
+            result = check_equals(obj, patt_type);
+    }
+    push_op(BOX(result));
+}
+
+static inline void interpret(FILE* f) {
 #define FAIL failure("ERROR: invalid opcode %d-%d\n", h, l)
 
     init(bf->global_area_size);
@@ -601,7 +638,7 @@ void interpret(FILE* f) {
                 break;
 
             case 6:
-                failure("\nDont implement for PATT\t%s", pats[l]);
+                patt(l);
                 break;
 
             case 7: {
