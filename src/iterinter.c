@@ -456,22 +456,22 @@ static inline bool check_tag(int32_t obj, int32_t tag) {
     if (UNBOXED(obj)) {
         return false;
     }
-    int32_t actual_rag = TAG(TO_DATA(obj)->data_header);
+    int32_t actual_tag = TAG(TO_DATA(obj)->data_header);
     switch (tag) {
         case ref_type:
             return true;
         case str_literal: {
             int32_t other_str = pop_op();
-            return Bstring_patt((void*)other_str, (void*)obj);
+            return UNBOX(Bstring_patt((void*)other_str, (void*)obj));
         }
         case string_type:
-            return actual_rag == STRING_TAG;
+            return actual_tag == STRING_TAG;
         case array_type:
-            return actual_rag == ARRAY_TAG;
+            return actual_tag == ARRAY_TAG;
         case sexp_type:
-            return actual_rag == SEXP_TAG;
+            return actual_tag == SEXP_TAG;
         case (closure_type):
-            return actual_rag == CLOSURE_TAG;
+            return actual_tag == CLOSURE_TAG;
         default:
             failure("There is no tag %d", tag);
     }
