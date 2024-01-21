@@ -272,7 +272,7 @@ addr* get_addr(addr place, addr idx) {
             return fp - idx;
         case A:
             ASSERT_TRUE(idx < n_args, "Arguments overflow!");
-            return fp + idx + 1;
+            return fp + n_args - idx;
         case C:
 
         default:
