@@ -20,7 +20,11 @@ extern void* Bsta(void* v, int i, void* x);
 extern int LtagHash(char*);
 extern int Btag(void* d, int t, int n);
 extern void* Lstring(void* p);
-extern int Bclosure_tag_patt(void *x);
+extern int Bclosure_tag_patt(void* x);
+extern int Bstring_patt(void* x, void* y);
+extern int Barray_patt(void* d, int n);
+extern int Bstring_tag_patt(void* x);
+extern int Barray_tag_patt(void* x);
 
 #define ASSERT_TRUE(condition, msg, ...)                         \
     do                                                           \
@@ -438,42 +442,58 @@ static inline void call_bsexp(void) {
     push_op((int32_t)r->contents);
 }
 
-enum { str_literal, string, array, p_sexp, ref, val, fun };
+enum {
+    str_literal,
+    string_type,
+    array_type,
+    sexp_type,
+    ref_type,
+    val_type,
+    closure_type
+};
 
-static inline bool check_equals(int32_t obj, int32_t tag) {
+static inline bool check_tag(int32_t obj, int32_t tag) {
+    if (UNBOXED(obj)) {
+        return false;
+    }
+    int32_t actual_rag = TAG(TO_DATA(obj)->data_header);
     switch (tag) {
-        // case (string):
-        //     return STRING_TAG;
-        // case (array):
-        //     return ARRAY_TAG;
-        // case (p_sexp):
-        //     return SEXP_TAG;
-        case (fun):
-            if(UNBOXED(obj)) return false;
-            return BOX(TAG(TO_DATA(obj)->data_header) == CLOSURE_TAG);
+        case ref_type:
+            return true;
+        case str_literal: {
+            int32_t other_str = pop_op();
+            return Bstring_patt((void*)other_str, (void*)obj);
+        }
+        case string_type:
+            return actual_rag == STRING_TAG;
+        case array_type:
+            return actual_rag == ARRAY_TAG;
+        case sexp_type:
+            return actual_rag == SEXP_TAG;
+        case (closure_type):
+            return actual_rag == CLOSURE_TAG;
         default:
             failure("There is no tag %d", tag);
     }
 }
 
 static inline void patt(int32_t patt_type) {
-    int32_t obj = pop_op();
     bool result = false;
-    switch (patt_type) {
-            // case str_literal:
-            //   result = strcmp((char*)patt_type, (char*)obj);
-            // break;
-        case ref:
-            result = !UNBOXED(obj);
-            break;
-        case val:
-            result = UNBOXED(obj);
-            break;
+    int32_t obj = pop_op();
 
-        default:
-            result = check_equals(obj, patt_type);
+    if (patt_type == val_type) {
+        result = UNBOXED(obj);
+    } else {
+        result = check_tag(obj, patt_type);
     }
     push_op(BOX(result));
+}
+
+// pattern matching with array
+static inline void array(void) {
+    int32_t array_size = BOX(next_int());
+    int32_t actual_obj = pop_op();
+    push_op(Barray_patt((void*)actual_obj, array_size));
 }
 
 static inline void interpret(FILE* f) {
@@ -617,12 +637,12 @@ static inline void interpret(FILE* f) {
                     case 7:
                         tag();
                         break;
-
                     case 8:
-                        failure("\nDont implement for ARRAY\t%d", next_int());
+                        array();
                         break;
 
                     case 9:
+
                         failure("\nDont implement for FAIL\t%d", next_int());
                         failure("\nDont implement for %d", next_int());
                         break;
