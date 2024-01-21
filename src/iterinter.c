@@ -20,11 +20,8 @@ extern void* Bsta(void* v, int i, void* x);
 extern int LtagHash(char*);
 extern int Btag(void* d, int t, int n);
 extern void* Lstring(void* p);
-extern int Bclosure_tag_patt(void* x);
 extern int Bstring_patt(void* x, void* y);
 extern int Barray_patt(void* d, int n);
-extern int Bstring_tag_patt(void* x);
-extern int Barray_tag_patt(void* x);
 
 #define ASSERT_TRUE(condition, msg, ...)                         \
     do                                                           \
@@ -136,8 +133,9 @@ addr* globals;
 // bytefile info
 bytefile* bf;
 
-int n_args;
-int n_locals;
+int n_args = 0;
+int n_locals = 0;
+bool is_closure = false;
 
 // get operands stack top
 static inline addr* sp() { return (addr*)__gc_stack_top; }
@@ -211,16 +209,19 @@ inline static int32_t next_int() {
 inline static void call(void) {
     int32_t func_label = next_int();
     int32_t n_args = next_int();
+    is_closure = false;
 
     push_call((addr)ip);  // return address
     update_ip(bf->code_ptr + func_label);
 }
 
-void begin(int new_n_locs, int new_n_args) {
+inline static void begin(int new_n_locs, int new_n_args) {
     // save frame pointer of callee function
     push_call((addr)fp);
     push_call(n_args);
     push_call(n_locals);
+    push_call(is_closure);
+
     fp = sp();
 
     n_args = new_n_args, n_locals = new_n_locs;
@@ -230,22 +231,7 @@ void begin(int new_n_locs, int new_n_args) {
     }
 }
 
-#define IS_MAIN (call_stack_top == call_stack_bottom - 1)
-static inline void end() {
-    addr return_val = pop_op();
-    move_sp(n_args + n_locals);
-    push_op(return_val);
-
-    n_locals = pop_call();   // locs_n
-    n_args = pop_call();     // args_n
-    fp = (addr*)pop_call();  // fp
-
-    if (call_stack_top != call_stack_bottom - 1) {
-        ip = (unsigned char*)pop_call();  // ret addr
-    }
-}
-
-void tag(void) {
+inline static void tag(void) {
     // for pattern matching: check
     // that sexp has given tag and fields count
     char* tag = STRING;
@@ -264,7 +250,7 @@ inline static int32_t get_closure(int32_t* p) {
 }
 
 enum { G, L, A, C };
-addr* get_addr(addr place, addr idx) {
+inline static addr* get_addr(addr place, addr idx) {
     ASSERT_TRUE(idx >= 0, "Index less than zero!!");
     switch (place) {
         case G:
@@ -315,7 +301,6 @@ void STA() {
 // expired by function `Bclosure` from runtime.c
 inline static void closure(void) {
     int i, ai;
-    size_t* argss;
     data* r;
 
     void* closure_addr = (void*)next_int();
@@ -348,9 +333,31 @@ inline static void call_closure(void) {
     // Stack store count of closure arguments and closure object
     // in 0 field in closure stored address, in other -- captured variables
     int32_t closure_label = get_closure((int32_t*)sp()[n_args + 1]);
+    is_closure = true;
 
     push_call((addr)ip);  // return address
     update_ip(bf->code_ptr + (int32_t)closure_label);
+}
+
+#define IS_MAIN (call_stack_top == call_stack_bottom - 1)
+static inline void end() {
+    addr return_val = pop_op();
+    move_sp(n_args + n_locals);
+    
+    bool is_closure = pop_call();
+    if (is_closure) {
+        pop_op();
+    }
+
+    push_op(return_val);
+
+    n_locals = pop_call();   // locs_n
+    n_args = pop_call();     // args_n
+    fp = (addr*)pop_call();  // fp
+
+    if (call_stack_top != call_stack_bottom - 1) {
+        ip = (unsigned char*)pop_call();  // ret addr
+    }
 }
 //"+", "-", "*", "/", "%", "<", "<=", ">", ">=", "==", "!=", "&&", "!!"
 void binop(int32_t operator_code) {
@@ -573,6 +580,7 @@ static inline void interpret(FILE* f) {
                         break;
 
                     case 11: {
+                        // ELEM
                         int32_t idx = pop_op();
                         int32_t array = pop_op();
                         push_op((int32_t)Belem((char*)array, idx));
@@ -664,7 +672,7 @@ static inline void interpret(FILE* f) {
             case 7: {
                 switch (l) {
                     case 0: {
-                        // read make it BOX
+                        // read make it BOX itself
                         addr value = Lread();
                         push_op(value);
                         break;
