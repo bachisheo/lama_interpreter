@@ -55,3 +55,6 @@ test: $(TARGET)
 	$(MAKE) -C lama-v1.20/regression/expressions 
 	$(MAKE) -C lama-v1.20/regression/deep-expressions 
 
+performance: $(TARGET)
+	$(MAKE) -C lama-v1.20/performance
+
