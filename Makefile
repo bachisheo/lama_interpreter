@@ -54,4 +54,6 @@ bc:
 
 test: $(TARGET)
 	$(MAKE) -C lama-v1.20/regression  
+	$(MAKE) -C lama-v1.20/regression/expressions 
+	$(MAKE) -C lama-v1.20/regression/deep-expressions 
 

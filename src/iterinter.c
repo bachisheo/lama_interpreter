@@ -241,12 +241,16 @@ inline static void tag(void) {
     push_op(Btag((void*)sexp, tag_hash, BOX(n_field)));
 }
 
-inline static int32_t get_closure(int32_t* p) {
+inline static data* get_closure_content(int32_t* p) {
     data* closure_obj = TO_DATA(p);
     int t = TAG(closure_obj->data_header);
     ASSERT_TRUE(t == CLOSURE_TAG,
                 "get_closure: pointer to not-closure object as argument");
-    return ((int32_t*)closure_obj->contents)[0];
+    return closure_obj->contents;
+}
+
+inline static int32_t get_closure_addr(int32_t* p) {
+    return ((int32_t*)get_closure_content(p))[0];
 }
 
 enum { G, L, A, C };
@@ -263,8 +267,11 @@ inline static addr* get_addr(addr place, addr idx) {
         case A:
             ASSERT_TRUE(idx < n_args, "Arguments overflow!");
             return fp + n_args - idx;
-        case C:
-
+        case C: {
+            int32_t* closure_addr =
+                get_closure_content((int32_t*)fp[n_args + 1]);
+            return (closure_addr + idx + 1);
+        }
         default:
             failure("Unknown place %d", place);
     }
@@ -332,18 +339,27 @@ inline static void call_closure(void) {
     // closure addr not in code -- it stored in closure object.
     // Stack store count of closure arguments and closure object
     // in 0 field in closure stored address, in other -- captured variables
-    int32_t closure_label = get_closure((int32_t*)sp()[n_args + 1]);
+    int32_t closure_label = get_closure_addr((int32_t*)sp()[n_args + 1]);
     is_closure = true;
 
     push_call((addr)ip);  // return address
     update_ip(bf->code_ptr + (int32_t)closure_label);
 }
 
+// CBEGIN
+// Begin in closure if there has captured variables
+// otherwise closure called with `BEGIN`
+inline static void begin_closure() {
+    int new_n_args = next_int();
+    int new_n_locs = next_int();
+    begin(new_n_locs, new_n_args);
+}
+
 #define IS_MAIN (call_stack_top == call_stack_bottom - 1)
 static inline void end() {
     addr return_val = pop_op();
     move_sp(n_args + n_locals);
-    
+
     bool is_closure = pop_call();
     if (is_closure) {
         pop_op();
@@ -628,8 +644,7 @@ static inline void interpret(FILE* f) {
                     }
 
                     case 3:
-                        failure("\nDont implement for CBEGIN\t%d ", next_int());
-                        failure("\nDont implement for %d", next_int());
+                        begin_closure();
                         break;
 
                     case 4:

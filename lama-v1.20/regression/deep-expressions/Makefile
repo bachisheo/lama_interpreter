@@ -1,6 +1,7 @@
 TESTS=$(sort $(basename $(wildcard generated*.lama)))
 
-LAMAC = ../../src/lamac
+LAMAC=lamac
+ITER_INTER=../../build/iterinter
 
 .PHONY: check $(TESTS)
 
@@ -8,10 +9,12 @@ check: $(TESTS)
 
 $(TESTS): %: %.lama
 	@echo "regression/deep-expressions/$@"
-	@LAMA=../../runtime $(LAMAC) $< && cat $@.input | ./$@ > $@.log && diff $@.log orig/$@.log
-	@cat $@.input | LAMA=../../runtime $(LAMAC) -i $< > $@.log && diff $@.log orig/$@.log
-	@cat $@.input | LAMA=../../runtime $(LAMAC) -s $< > $@.log && diff $@.log orig/$@.log
+	$(ITER_INTER) $< < $@.input > $@.log && diff $@.log orig/$@.log
+
+#generate bytecode for lama file
+%.bc: %.lama 
+	$(LAMAC) -b $<
 
 clean:
-	rm -f *.log *.s *~
+	rm -f *.bc *.log *.s *~
 	find . -maxdepth 1 -type f -not -name '*.*' -not -name 'Makefile' -delete
