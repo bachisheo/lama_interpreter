@@ -41,8 +41,6 @@ $(TARGET): $(TARGET).o lama_runtime
 mkbuild: 
 	mkdir -p build 
 
-
-
 # -r -- recursive
 clean:
 	$(RM) -r build 

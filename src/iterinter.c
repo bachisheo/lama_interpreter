@@ -568,8 +568,7 @@ static inline void interpret(FILE* f) {
                         break;
 
                     case 3:
-                        failure("\nDont implement for STI");
-                        break;
+                        failure("Untested operation STI");
 
                     case 4:
                         STA();
@@ -588,8 +587,7 @@ static inline void interpret(FILE* f) {
                         }
                         break;
                     case 7:
-                        failure("\nDont implement for RET");
-                        break;
+                        failure("Untested operation RET");
 
                     case 8:  // DROP
                         pop_op();
@@ -600,8 +598,7 @@ static inline void interpret(FILE* f) {
                         break;
 
                     case 10:
-                        failure("\nDont implement for SWAP");
-                        break;
+                        failure("Untested operation SWAP");
 
                     case 11: {  // ELEM
                         int32_t idx = pop_op();

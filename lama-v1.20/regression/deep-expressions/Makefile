@@ -1,13 +1,13 @@
 TESTS=$(sort $(basename $(wildcard generated*.lama)))
+ITER_INTER=../../../build/iterinter
 
 LAMAC=lamac
-ITER_INTER=../../../build/iterinter
 
 .PHONY: check $(TESTS)
 
 check: $(TESTS)
 
-$(TESTS): %: %.lama %.bc
+$(TESTS): %: %.bc
 	@echo "regression/deep-expressions/$@"
 	$(ITER_INTER) $< < $@.input > $@.log && diff $@.log orig/$@.log
 
