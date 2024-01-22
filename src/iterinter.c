@@ -1,28 +1,11 @@
 #include <stddef.h>
 #include <stdint.h>
-#include <string.h>
 
 #include "../lama-v1.20/runtime/gc.h"
 #include "../lama-v1.20/runtime/runtime.h"
 #include "../lama-v1.20/runtime/runtime_common.h"
 
-// variables needed for gc linkage
-void* __start_custom_data = 0;
-void* __stop_custom_data = 0;
-
-// dont have access to runtime, define with `extern`
-extern int Lread();
-extern int Lwrite(int n);
-extern void* Bstring(void* p);
-extern int Llength(void* p);
-extern void* Belem(void* p, int i);
-extern void* Bsta(void* v, int i, void* x);
-extern int LtagHash(char*);
-extern int Btag(void* d, int t, int n);
-extern void* Lstring(void* p);
-extern int Bstring_patt(void* x, void* y);
-extern int Barray_patt(void* d, int n);
-
+// helper macros
 #define ASSERT_TRUE(condition, msg, ...)                         \
     do                                                           \
         if (!(condition)) failure("\n" msg "\n", ##__VA_ARGS__); \
@@ -30,20 +13,10 @@ extern int Barray_patt(void* d, int n);
 
 #define STRING get_string(bf, next_int())
 
-// 1 MB like in JVM by default + memory for globals
-#define STACK_SIZE (1 << 20)
-#define MEM_SIZE (STACK_SIZE * 2)
-
-// area for global variables and stack
-static int32_t gc_handled_memory[MEM_SIZE];
-// area for call stack
-static int32_t call_stack[STACK_SIZE];
-
 // end of bytefile
 unsigned char* eof;
 
-const int32_t EMPTY_BOX = BOX(0);
-
+/*THE HELPING CODE FROM BYTERUN*/
 /* The unpacked representation of bytecode file */
 typedef struct {
     char* string_ptr;     /* A pointer to the beginning of the string table */
@@ -111,72 +84,109 @@ bytefile* read_file(char* fname) {
     return file;
 }
 
-#define addr int32_t
-#define byte char
+// variables needed for gc linkage
+void* __start_custom_data = 0;
+void* __stop_custom_data = 0;
 
+// runtime imports
+// dont have access to `runtime.c` methods, so defined it with `extern`
+extern int Lread();
+extern int Lwrite(int n);
+extern void* Bstring(void* p);
+extern void* Lstring(void* p);
+extern int Llength(void* p);
+extern void* Belem(void* p, int i);
+extern void* Bsta(void* v, int i, void* x);
+extern int LtagHash(char*);
+extern int Btag(void* d, int t, int n);
+extern void* Lstring(void* p);
+extern int Bstring_patt(void* x, void* y);
+extern int Barray_patt(void* d, int n);
+
+/*
+ * GLOBAL VARIABLES FOR INTERPRETER
+ */
+
+// constants
+//  1 MB like in JVM by default + memory for globals
+#define STACK_SIZE (1 << 20)
+#define MEM_SIZE (STACK_SIZE * 2)
+const int32_t EMPTY_BOX = BOX(0);
+
+// area for global variables and stack
+static int32_t gc_handled_memory[MEM_SIZE];
+// area for call stack
+static int32_t call_stack[STACK_SIZE];
 // current instruction pointer
 unsigned char* ip;
 // address of current stack frame
-addr* fp;
-// call stack
-addr* call_stack_bottom;
-// call stack pointer
-addr* call_stack_top;
-// gc handled memory top
-// and operands stack top
+int32_t* fp;
+// call stack bottom pointer
+int32_t* call_stack_bottom;
+// call stack top pointer
+int32_t* call_stack_top;
+// start of gc handled memory and operands stack top
 extern size_t __gc_stack_top;
 // gc handled memory bottom
 extern size_t __gc_stack_bottom;
-// operands stack bottom
-// and start of  globals area
-addr* globals;
+// operands stack bottom and start of globals area
+int32_t* globals;
 // bytefile info
 bytefile* bf;
 
 int n_args = 0;
 int n_locals = 0;
+// needed to pop closure address from stack operands
 bool is_closure = false;
 
+/*
+ * STACKS HANDLING
+ */
+
 // get operands stack top
-static inline addr* sp() { return (addr*)__gc_stack_top; }
+static inline int32_t* sp() { return (int32_t*)__gc_stack_top; }
 
 static inline void move_sp(int delta) {
     __gc_stack_top = (size_t)(sp() + delta);
 }
 
-void push_op(addr value) {
+static inline void push_op(int32_t value) {
     *sp() = value;
     move_sp(-1);
     ASSERT_TRUE(sp() != gc_handled_memory, "\nOperands stack overflow");
 }
 
-void push_call(addr value) {
+static inline void push_call(int32_t value) {
     *call_stack_top = value;
     call_stack_top--;
     ASSERT_TRUE(call_stack_top != call_stack, "\nCall stack overflow");
 }
 
-addr pop_op(void) {
-    ASSERT_TRUE(sp() != (addr*)__gc_stack_bottom - 1,
+static inline int32_t pop_op(void) {
+    ASSERT_TRUE(sp() != (int32_t*)__gc_stack_bottom - 1,
                 "\nAccess to empty operands stack");
     move_sp(1);
     return *sp();
 }
 
-addr peek_op(void) { return *(sp() + 1); }
+static inline int32_t peek_op(void) { return *(sp() + 1); }
 
-addr pop_call() {
+static inline int32_t pop_call() {
     ASSERT_TRUE(call_stack_top != call_stack_bottom - 1,
                 "\nAccess to empty call stack");
     call_stack_top++;
     return *call_stack_top;
 }
 
-void init(addr global_area_size) {
+/**
+ * THE HELPING CODE FOR INTERPRETER
+ */
+
+void init(int32_t global_area_size) {
     // init GC heap, otherwise GC will fail (all heap pointers are 0)
     __init();
     __gc_stack_bottom = (size_t)gc_handled_memory + MEM_SIZE;
-    globals = (addr*)__gc_stack_bottom - global_area_size;
+    globals = (int32_t*)__gc_stack_bottom - global_area_size;
     __gc_stack_top = (size_t)(globals - 1);
 
     call_stack_bottom = call_stack + STACK_SIZE;
@@ -206,18 +216,24 @@ inline static int32_t next_int() {
     return (ip += sizeof(int), *(int*)(ip - sizeof(int)));
 }
 
+#define IS_MAIN (call_stack_top == call_stack_bottom - 1)
+
+/**
+ * METHODS FOR HANDLING BYTECODE
+ */
+
 inline static void call(void) {
     int32_t func_label = next_int();
     int32_t n_args = next_int();
     is_closure = false;
 
-    push_call((addr)ip);  // return address
+    push_call((int32_t)ip);  // return address
     update_ip(bf->code_ptr + func_label);
 }
 
 inline static void begin(int new_n_locs, int new_n_args) {
     // save frame pointer of callee function
-    push_call((addr)fp);
+    push_call((int32_t)fp);
     push_call(n_args);
     push_call(n_locals);
     push_call(is_closure);
@@ -225,9 +241,8 @@ inline static void begin(int new_n_locs, int new_n_args) {
     fp = sp();
 
     n_args = new_n_args, n_locals = new_n_locs;
-    addr value = BOX(0);
     for (int i = 0; i < new_n_locs; i++) {
-        push_op(value);
+        push_op(EMPTY_BOX);
     }
 }
 
@@ -254,11 +269,11 @@ inline static int32_t get_closure_addr(int32_t* p) {
 }
 
 enum { G, L, A, C };
-inline static addr* get_addr(addr place, addr idx) {
+inline static int32_t* get_addr(int32_t place, int32_t idx) {
     ASSERT_TRUE(idx >= 0, "Index less than zero!!");
     switch (place) {
         case G:
-            ASSERT_TRUE(globals + idx < (addr*)__gc_stack_bottom,
+            ASSERT_TRUE(globals + idx < (int32_t*)__gc_stack_bottom,
                         "Out of memory (global %d)", idx);
             return globals + idx;
         case L:
@@ -277,23 +292,23 @@ inline static addr* get_addr(addr place, addr idx) {
     }
 }
 
-void LD(int32_t place_type, int idx) {
-    addr* place = get_addr(place_type, idx);
+static inline void LD(int32_t place_type, int idx) {
+    int32_t* place = get_addr(place_type, idx);
     push_op(*place);
 }
 
-void LDA(int32_t place_type, int idx) {
-    addr* place = get_addr(place_type, idx);
+static inline void LDA(int32_t place_type, int idx) {
+    int32_t* place = get_addr(place_type, idx);
     push_op((int32_t)place);
 }
 
-void ST(addr place_type, int idx) {
-    addr value = peek_op();
-    addr* place = get_addr(place_type, idx);
+static inline void ST(int32_t place_type, int idx) {
+    int32_t value = peek_op();
+    int32_t* place = get_addr(place_type, idx);
     *place = value;
 }
 
-void STA() {
+static inline void STA() {
     int32_t value = pop_op();
     int32_t dest = pop_op();
     if (UNBOXED(dest)) {
@@ -306,6 +321,7 @@ void STA() {
 }
 
 // expired by function `Bclosure` from runtime.c
+// create an object of closure ant put it on stack
 inline static void closure(void) {
     int i, ai;
     data* r;
@@ -323,13 +339,12 @@ inline static void closure(void) {
     for (i = 0; i < n; i++) {
         unsigned char place_type = next_byte();
         int32_t idx = next_int();
-        addr* place = get_addr(place_type, idx);
+        int32_t* place = get_addr(place_type, idx);
         ai = *place;
         ((int*)r->contents)[i + 1] = ai;
     }
 
     pop_extra_root((void**)&r);
-
     push_op((int32_t)r->contents);
 }
 
@@ -342,22 +357,21 @@ inline static void call_closure(void) {
     int32_t closure_label = get_closure_addr((int32_t*)sp()[n_args + 1]);
     is_closure = true;
 
-    push_call((addr)ip);  // return address
+    push_call((int32_t)ip);  // return address
     update_ip(bf->code_ptr + (int32_t)closure_label);
 }
 
 // CBEGIN
 // Begin in closure if there has captured variables
-// otherwise closure called with `BEGIN`
+// otherwise closure starts with `BEGIN`
 inline static void begin_closure() {
     int new_n_args = next_int();
     int new_n_locs = next_int();
     begin(new_n_locs, new_n_args);
 }
 
-#define IS_MAIN (call_stack_top == call_stack_bottom - 1)
 static inline void end() {
-    addr return_val = pop_op();
+    int32_t return_val = pop_op();
     move_sp(n_args + n_locals);
 
     bool is_closure = pop_call();
@@ -367,9 +381,9 @@ static inline void end() {
 
     push_op(return_val);
 
-    n_locals = pop_call();   // locs_n
-    n_args = pop_call();     // args_n
-    fp = (addr*)pop_call();  // fp
+    n_locals = pop_call();      // locs_n
+    n_args = pop_call();        // args_n
+    fp = (int32_t*)pop_call();  // fp
 
     if (call_stack_top != call_stack_bottom - 1) {
         ip = (unsigned char*)pop_call();  // ret addr
@@ -500,6 +514,11 @@ static inline bool check_tag(int32_t obj, int32_t tag) {
     }
 }
 
+/**
+Check that object from operands stack matches with pattern:
+has the same type (tag) or equals as a string (in these case
+other string stored on stack to)
+*/
 static inline void patt(int32_t patt_type) {
     bool result = false;
     int32_t obj = pop_op();
@@ -521,24 +540,18 @@ static inline void array(void) {
 
 static inline void interpret(FILE* f) {
 #define FAIL failure("ERROR: invalid opcode %d-%d\n", h, l)
-
     init(bf->global_area_size);
-
     ip = bf->code_ptr;
-
     do {
-        // read next byte
         char x = next_byte(), h = (x & 0xF0) >> 4, l = x & 0x0F;
 
         switch (h) {
             case 15:
                 goto stop;
 
-            /* BINOP */
             case 0:
                 binop(l - 1);
                 break;
-
             case 1:
                 switch (l) {
                     case 0:  // CONST
@@ -550,7 +563,6 @@ static inline void interpret(FILE* f) {
                         push_op((int32_t)Bstring(string_in_pool));
                         break;
                     }
-
                     case 2:
                         call_bsexp();
                         break;
@@ -563,13 +575,11 @@ static inline void interpret(FILE* f) {
                         STA();
                         break;
 
-                    case 5:
-                        // JMP
-                        {
-                            int x = next_int();
-                            update_ip(bf->code_ptr + x);
-                            break;
-                        }
+                    case 5: {  // JMP
+                        int x = next_int();
+                        update_ip(bf->code_ptr + x);
+                        break;
+                    }
 
                     case 6:
                         end();
@@ -581,13 +591,11 @@ static inline void interpret(FILE* f) {
                         failure("\nDont implement for RET");
                         break;
 
-                    case 8:
-                        // DROP
+                    case 8:  // DROP
                         pop_op();
                         break;
 
-                    case 9:
-                        // DUP
+                    case 9:  // DUP
                         push_op(peek_op());
                         break;
 
@@ -595,8 +603,7 @@ static inline void interpret(FILE* f) {
                         failure("\nDont implement for SWAP");
                         break;
 
-                    case 11: {
-                        // ELEM
+                    case 11: {  // ELEM
                         int32_t idx = pop_op();
                         int32_t array = pop_op();
                         push_op((int32_t)Belem((char*)array, idx));
@@ -613,10 +620,9 @@ static inline void interpret(FILE* f) {
             case 3:
                 LDA(l, next_int());
                 break;
-            case 4: {
+            case 4:
                 ST(l, next_int());
                 break;
-            }
 
             case 5:
                 switch (l) {
@@ -664,14 +670,13 @@ static inline void interpret(FILE* f) {
                         array();
                         break;
 
-                    case 9:
+                    case 9: {  // FAIL
+                        int32_t line = next_int();
+                        int32_t col = next_byte();
+                        failure("\nFAIL at \t%d:%d", line, col);
+                    }
 
-                        failure("\nDont implement for FAIL\t%d", next_int());
-                        failure("\nDont implement for %d", next_int());
-                        break;
-
-                    case 10:
-                        // LINE -- helper information about source code line
+                    case 10:  // LINE -- helper information about source code
                         next_int();
                         break;
 
@@ -688,13 +693,13 @@ static inline void interpret(FILE* f) {
                 switch (l) {
                     case 0: {
                         // read make it BOX itself
-                        addr value = Lread();
+                        int32_t value = Lread();
                         push_op(value);
                         break;
                     }
 
                     case 1: {
-                        addr value = pop_op();
+                        int32_t value = pop_op();
                         value = Lwrite(value);
                         push_op(value);
                     } break;
@@ -704,7 +709,7 @@ static inline void interpret(FILE* f) {
                         break;
 
                     case 3:
-                        push_op(Lstring((char*)pop_op()));
+                        push_op((int32_t)Lstring((char*)pop_op()));
                         break;
 
                     case 4:
