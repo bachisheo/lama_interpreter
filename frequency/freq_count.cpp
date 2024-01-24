@@ -12,10 +12,12 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <ios>
+
 // end of bytefile
 unsigned char* eof;
 
-/*THE HELPING CODE FROM next_byte()RUN*/
+/*THE HELPING CODE FROM BYTERUN*/
 /* The unpacked representation of bytecode file */
 using bytefile = struct {
     char* string_ptr; /* A pointer to the beginning of the string table */
@@ -106,10 +108,7 @@ char* get_public_name(bytefile* f, int i) {
 /* Gets an offset for a publie symbol */
 int get_public_offset(bytefile* f, int i) { return f->public_ptr[i * 2 + 1]; }
 
-unsigned char* ip;
-
 struct freq_counter {
-    bytefile* bf;
     freq_counter(bytefile* bf) : bf(bf) {}
     void print_frequency() {
         calculate_codes();
@@ -117,12 +116,15 @@ struct freq_counter {
                                                               codes.end());
         std::sort(sorted_codes.begin(), sorted_codes.end(), cmp);
         for (auto& it : sorted_codes) {
-            std::cout << it.first << std::string(3 - (it.first.size() + 3) / 8, '\t')
-            << it.second << std::endl;
+            std::cout << std::left << std::setw(24) << it.first << "\t"
+                      << it.second << std::endl;
         }
     }
 
    private:
+    unsigned char* ip;
+    bytefile* bf;
+
     int32_t next_int() {
         ASSERT_TRUE(ip + sizeof(int) < eof, "IP points out of bytecode area!");
         return (ip += sizeof(int), *(int*)(ip - sizeof(int)));
@@ -156,23 +158,21 @@ struct freq_counter {
 
     void inc(std::string code, std::string args) {
         std::string key = code + sep + args;
-        auto& entry = *(codes.try_emplace(key, 0).first);
-        entry.second++;
+        inc(key);
     }
 
     void inc(std::string code, int32_t arg) {
         std::string key = code + sep + std::to_string(arg);
-        auto& entry = *(codes.try_emplace(key, 0).first);
-        entry.second++;
+        inc(key);
     }
     void inc(std::string code, int32_t arg1, int32_t arg2) {
-        std::string key = code + sep + std::to_string(arg1) +
-                          std::to_string(arg2);
-        auto& entry = *(codes.try_emplace(key, 0).first);
-        entry.second++;
+        std::string key =
+            code + sep + std::to_string(arg1) + std::to_string(arg2);
+        inc(key);
     }
 
-    void FAIL() { failure("ERROR: invalid opcode %d-%d\n", h, l); }
+    void fail() { failure("ERROR: invalid opcode %d-%d\n", h, l); }
+
     template <typename T>
     std::string int_to_hex(T i) {
         std::stringstream stream;
@@ -180,12 +180,14 @@ struct freq_counter {
                << std::hex << i;
         return stream.str();
     }
-
+    std::string get_addr_view(char l, int32_t addr) {
+        return "(" + plcs[l] + std::to_string(addr) + ")";
+    }
     void calculate_codes() {
         ip = (unsigned char*)bf->code_ptr;
         do {
             char x = next_byte(), h = (x & 0xF0) >> 4, l = x & 0x0F;
-            auto addr = ip - bf->code_ptr - 1;
+
             switch (h) {
                 case 15:
                     return;
@@ -248,7 +250,7 @@ struct freq_counter {
                             break;
 
                         default:
-                            FAIL();
+                            fail();
                     }
                     break;
 
@@ -279,15 +281,18 @@ struct freq_counter {
                             inc("CBEGIN", next_int(), next_int());
                             break;
 
-                        case 4:
-                            inc("CLOSURE", next_int());
-                            {
-                                int n = next_int();
-                                std::string place = plcs[next_byte()];
-                                inc("(" + place + std::to_string(next_int()) +
-                                    ")");
-                            };
+                        case 4: {
+                            std::stringstream args;
+                            args << next_int();
+                            int n = next_int();
+                            for (int i = 0; i < n; i++) {
+                                unsigned char byte = next_byte();
+                                args << arg_sep
+                                     << get_addr_view(byte, next_int());
+                            }
+                            inc("CLOSURE", args.str());
                             break;
+                        }
 
                         case 5:
                             inc("CALLC", next_int());
@@ -315,7 +320,7 @@ struct freq_counter {
                             break;
 
                         default:
-                            FAIL();
+                            fail();
                     }
                     break;
 
@@ -348,12 +353,12 @@ struct freq_counter {
                             break;
 
                         default:
-                            FAIL();
+                            fail();
                     }
                 } break;
 
                 default:
-                    FAIL();
+                    fail();
             }
 
         } while (1);
@@ -364,6 +369,5 @@ int main(int argc, char* argv[]) {
     bytefile* bf = read_file(argv[1]);
     freq_counter x(bf);
     x.print_frequency();
-
     return 0;
 }

@@ -9,7 +9,7 @@
             "request": "launch",
             "name": "Debug",
             "program": "${workspaceFolder}/build/freq_count",
-            "args": ["${workspaceFolder}/lama-v1.20/performance/Sort.bc"],
+            "args": ["${workspaceFolder}/lama-v1.20/regression/test094.bc"],
             "cwd": "${workspaceFolder}"
         }
     ]
