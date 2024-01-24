@@ -1,5 +1,6 @@
 TESTS=$(sort $(basename $(wildcard *.lama)))
-ITER_INTER=../../build/iterinter
+TESTS_BC=$(sort $(basename $(wildcard *.bc)))
+FREQ_COUNT=../../build/freq_count
 RUNTIME=LAMA=../runtime 
 RESULT=../../benchmarks.txt
 
@@ -7,19 +8,19 @@ LAMAC=lamac
 
 .PHONY: check $(TESTS)
 
+all: $(TESTS)
+
 check: $(TESTS)
 
-%.bc: %.lama 
-	$(LAMAC) -b $<
+$(TESTS):
+	@echo "performance/$@"
+	$(LAMAC) -b $@.lama
 
-%lama_bin: %.lama
-	$(RUNTIME) $(LAMAC) $<	
+test: $(TESTS_BC)
 
-$(TESTS): %: %.bc %lama_bin
-	@echo $@
-	`which time` -o $(RESULT) -f "LAMA BINARY RUN \t\t\t%U" ./$@ 
-	$(RUNTIME) echo "0" | `which time` -o $(RESULT) -a -f "LAMA INTERPRETER RUN \t\t%U" $(LAMAC) -i $@.lama 
-	$(RUNTIME) echo "0" | `which time` -o $(RESULT) -a -f "LAMA STACK MACHINE RUN \t\t%U" $(LAMAC) -s $@.lama # -o $(RESULT)
-	`which time` -o $(RESULT) -a -f "ITERATIVE INTERPRETER RUN \t%U" $(ITER_INTER) $@.bc -o $(RESULT)
+$(TESTS_BC):
+	@echo "test bytecode frequency "
+	$(FREQ_COUNT) $@.bc
+
 clean:
 	$(RM) test*.log *.bc *.s *~ $(TESTS) *.i

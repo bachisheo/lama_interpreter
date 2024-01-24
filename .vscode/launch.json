@@ -8,8 +8,8 @@
             "type": "lldb",
             "request": "launch",
             "name": "Debug",
-            "program": "${workspaceFolder}/build/iterinter",
-            "args": ["${workspaceFolder}/lama-v1.20/regression/test093.bc"],
+            "program": "${workspaceFolder}/build/freq_count",
+            "args": ["${workspaceFolder}/lama-v1.20/performance/Sort.bc"],
             "cwd": "${workspaceFolder}"
         }
     ]

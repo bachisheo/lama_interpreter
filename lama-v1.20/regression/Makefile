@@ -19,8 +19,8 @@ ctest111:
 	@LAMA=../runtime $(LAMAC) test111.lama && cat test111.input | ./test111 > test111.log && diff test111.log orig/test111.log
 
 #generate bytecode for lama file
-%.bc: %.lama 
-	$(LAMAC) -b $<
+%.bc: 
+	$(MAKE)
 
 clean:
 	$(RM) *.bc test*.log *.s *.sm *~ $(TESTS) *.i $(DEBUG_FILES) test111
