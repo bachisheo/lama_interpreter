@@ -14,18 +14,18 @@
 #include <vector>
 
 // end of bytefile
-unsigned char* eof;
+uint8_t* eof;
 
 /*THE HELPING CODE FROM BYTERUN*/
 /* The unpacked representation of bytecode file */
-using bytefile = struct {
-    char* string_ptr; /* A pointer to the beginning of the string table */
-    int* public_ptr;  /* A pointer to the beginning of publics table    */
-    unsigned char* code_ptr; /* A pointer to the bytecode itself */
-    int* global_ptr;      /* A pointer to the global area                   */
-    int stringtab_size;   /* The size (in bytes) of the string table        */
-    int global_area_size; /* The size (in words) of global area             */
-    int public_symbols_number; /* The number of public symbols */
+struct bytefile {
+    const char* string_ptr; /* A pointer to the beginning of the string table */
+    const int* public_ptr;  /* A pointer to the beginning of publics table    */
+    const uint8_t* code_ptr; /* A pointer to the bytecode itself */
+    const int* global_ptr; /* A pointer to the global area                   */
+    unsigned int stringtab_size; /* The size (in bytes) of the string table   */
+    unsigned int global_area_size;      /* The size (in words) of global area */
+    unsigned int public_symbols_number; /* The number of public symbols */
     char buffer[0];
 };
 
@@ -60,7 +60,7 @@ bytefile* read_file(char* fname) {
 
     int file_size = sizeof(int) * 4 + (size = ftell(f));
     file = (bytefile*)malloc(file_size);
-    eof = (unsigned char*)file + file_size;
+    eof = (uint8_t*)file + file_size;
 
     if (file == 0) {
         failure("*** FAILURE: unable to allocate memory.\n");
@@ -78,32 +78,25 @@ bytefile* read_file(char* fname) {
     file->string_ptr =
         &file->buffer[file->public_symbols_number * 2 * sizeof(int)];
     file->public_ptr = (int*)file->buffer;
-    file->code_ptr = (unsigned char*)&file->string_ptr[file->stringtab_size];
+    file->code_ptr = (uint8_t*)&file->string_ptr[file->stringtab_size];
+
     return file;
 }
 
 // #include "../lama-v1.20/runtime/runtime.h"
 
-#define STRING get_string(bf, next_int())
+#define STRING std::string(get_string(bf, next_int()))
 #define ASSERT_TRUE(condition, msg, ...)                         \
     do                                                           \
         if (!(condition)) failure("\n" msg "\n", ##__VA_ARGS__); \
     while (0)
 
 /* Gets a string from a string table by an index */
-char* get_string(bytefile* f, int pos) {
+const char* get_string(bytefile* f, int pos) {
     ASSERT_TRUE(pos >= 0 && pos < f->stringtab_size,
                 "Index out of string pool!");
     return &f->string_ptr[pos];
 }
-
-/* Gets a name for a public symbol */
-char* get_public_name(bytefile* f, int i) {
-    return get_string(f, f->public_ptr[i * 2]);
-}
-
-/* Gets an offset for a publie symbol */
-int get_public_offset(bytefile* f, int i) { return f->public_ptr[i * 2 + 1]; }
 
 struct freq_counter {
     freq_counter(bytefile* bf) : bf(bf) {}
@@ -119,7 +112,7 @@ struct freq_counter {
     }
 
    private:
-    unsigned char* ip;
+    uint8_t* ip;
     bytefile* bf;
 
     int32_t next_int() {
@@ -164,7 +157,7 @@ struct freq_counter {
     }
     void inc(std::string code, int32_t arg1, int32_t arg2) {
         std::string key =
-            code + sep + std::to_string(arg1) + std::to_string(arg2);
+            code + sep + std::to_string(arg1) + arg_sep + std::to_string(arg2);
         inc(key);
     }
 
@@ -178,12 +171,12 @@ struct freq_counter {
         return stream.str();
     }
     std::string get_addr_view(char l, int32_t addr) {
-        return "(" + plcs[l] + std::to_string(addr) + ")";
+        return plcs[l] + "(" + std::to_string(addr) + ")";
     }
     void calculate_codes() {
-        ip = (unsigned char*)bf->code_ptr;
+        ip = (uint8_t*)bf->code_ptr;
         do {
-            char x = next_byte(), h = (x & 0xF0) >> 4, l = x & 0x0F;
+            uint8_t x = next_byte(), h = (x & 0xF0) >> 4, l = x & 0x0F;
 
             // outer switch
             enum { BINOP, H1_OPS, LD, LDA, ST, H5_OPS, PATT, H7_OPS };
@@ -238,10 +231,12 @@ struct freq_counter {
                             inc("STRING", STRING);
                             break;
 
-                        case BSEXP:
-                            inc("SEXP",
-                                STRING + arg_sep + std::to_string(next_int()));
+                        case BSEXP: {
+                            std::string name = STRING;
+                            int32_t args = next_int();
+                            inc("SEXP ", name + arg_sep + std::to_string(args));
                             break;
+                        }
 
                         case STI:
                             inc("STI");
@@ -252,7 +247,7 @@ struct freq_counter {
                             break;
 
                         case JMP:
-                            inc("JMP", next_int());
+                            inc("JMP", int_to_hex(next_int()));
                             break;
 
                         case END:
@@ -286,26 +281,26 @@ struct freq_counter {
 
                 case LD:
                 case LDA:
-                case ST: {
-                    std::string place =
-                        "(" + plcs[l] + std::to_string(next_int()) + ")";
-                    inc(lds[h - 2], place);
+                case ST:
+                    inc(lds[h - 2], get_addr_view(l, next_int()));
                     break;
-                }
 
                 case H5_OPS:
                     switch (l) {
                         case CJMPZ:
-                            inc("CJMPz", int_to_hex(next_int()) + ".8x");
+                            inc("CJMPz", int_to_hex(next_int()));
                             break;
 
                         case CJMPNZ:
-                            inc("CJMPnz", int_to_hex(next_int()) + ".8x");
+                            inc("CJMPnz", int_to_hex(next_int()));
                             break;
 
-                        case BEGIN:
-                            inc("BEGIN", next_int(), next_int());
+                        case BEGIN: {
+                            int n_args = next_int();
+                            int n_locs = next_int();
+                            inc("BEGIN", n_args, n_locs);
                             break;
+                        }
 
                         case CBEGIN:
                             inc("CBEGIN", next_int(), next_int());
@@ -328,22 +323,30 @@ struct freq_counter {
                             inc("CALLC", next_int());
                             break;
 
-                        case CALL:
-                            inc("CALL", next_int(), next_int());
+                        case CALL: {
+                            std::string addr = int_to_hex(next_int());
+                            inc("CALL",
+                                addr + arg_sep + std::to_string(next_int()));
                             break;
+                        }
 
-                        case TAG:
-                            inc("TAG ",
-                                STRING + arg_sep + std::to_string(next_int()));
+                        case TAG: {
+                            std::string name = STRING;
+                            int32_t args = next_int();
+                            inc("TAG ", name + arg_sep + std::to_string(args));
                             break;
+                        }
 
                         case ARRAY_KEY:
                             inc("ARRAY", next_int());
                             break;
 
-                        case FAIL:
-                            inc("FAIL", next_int(), next_int());
+                        case FAIL: {
+                            int line = next_int();
+                            int col = next_int();
+                            inc("FAIL", line, col);
                             break;
+                        }
 
                         case LINE:
                             inc("LINE", next_int());
@@ -397,7 +400,7 @@ struct freq_counter {
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        failure("Bad address!");
+        failure("Empty input! Specify the path to the bytecode file!");
     }
     bytefile* bf = read_file(argv[1]);
     freq_counter x(bf);

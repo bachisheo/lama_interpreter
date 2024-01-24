@@ -11,7 +11,7 @@ LAMA_ROOT=../lama-v1.20
 # -g -- add debug symbols 
 # -m32 -- 32 byte build mode 
 # -fstack-protector-all ??
-CFLAGS=-O0 -g -m32 -fstack-protector-all
+CFLAGS=-O3 -g -m32 -fstack-protector-all
 
 # info about make working 
 # this task will be run always, even if file don't change
@@ -58,5 +58,5 @@ test: $(TARGET)
 	$(MAKE) -C $(REGRESSION)/deep-expressions 
 
 performance: $(TARGET)
-	$(MAKE) -C $(LAMA_ROOT)/performance
+	$(MAKE) -C $(LAMA_ROOT)/performance performance
 

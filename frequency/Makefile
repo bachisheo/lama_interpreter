@@ -7,7 +7,7 @@ LAMAC=lamac
 TEST_FILES=../lama-v1.20/performance
 FREQ_COUNT=../build/freq_count
 CXX=g++
-CXXFLAGS=-O0 -g -m32 
+CXXFLAGS=-O3 -g -m32 
 all: $(TARGET)
 
 lama_runtime: 
@@ -23,7 +23,7 @@ $(TARGET): $(TARGET).o lama_runtime
 	$(CXX) $(CXXFLAGS) $(BUILDS)/$(TARGET).o $(RUNTIME)/runtime.a -o $(BUILDS)/$(TARGET) 
 
 test: $(TARGET)
-	$(MAKE) -C $(TEST_FILES) test
+	$(MAKE) -C $(TEST_FILES) frequency
 
 mkbuild: 
 	mkdir -p $(BUILDS) 
