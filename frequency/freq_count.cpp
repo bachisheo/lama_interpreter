@@ -79,8 +79,6 @@ bytefile* read_file(char* fname) {
         &file->buffer[file->public_symbols_number * 2 * sizeof(int)];
     file->public_ptr = (int*)file->buffer;
     file->code_ptr = (unsigned char*)&file->string_ptr[file->stringtab_size];
-    file->global_ptr = (int*)malloc(file->global_area_size * sizeof(int));
-
     return file;
 }
 

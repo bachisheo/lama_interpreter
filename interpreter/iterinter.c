@@ -26,33 +26,33 @@ unsigned char* eof;
 /*THE HELPING CODE FROM BYTERUN*/
 /* The unpacked representation of bytecode file */
 typedef struct {
-    char* string_ptr;     /* A pointer to the beginning of the string table */
-    int* public_ptr;      /* A pointer to the beginning of publics table    */
-    char* code_ptr;       /* A pointer to the bytecode itself               */
-    int* global_ptr;      /* A pointer to the global area                   */
-    int stringtab_size;   /* The size (in bytes) of the string table        */
-    int global_area_size; /* The size (in words) of global area             */
-    int public_symbols_number; /* The number of public symbols */
+    const char* string_ptr;     /* A pointer to the beginning of the string table */
+    const int* public_ptr;      /* A pointer to the beginning of publics table    */
+    const char* code_ptr;       /* A pointer to the bytecode itself               */
+    const int* global_ptr;      /* A pointer to the global area                   */
+    unsigned int stringtab_size;   /* The size (in bytes) of the string table        */
+    unsigned int global_area_size; /* The size (in words) of global area             */
+    unsigned int public_symbols_number; /* The number of public symbols */
     char buffer[0];
 } bytefile;
 
 /* Gets a string from a string table by an index */
-char* get_string(bytefile* f, int pos) {
-    ASSERT_TRUE(pos >= 0 && pos < f->stringtab_size,
+static inline char* get_string(bytefile* f, uint32_t pos) {
+    ASSERT_TRUE(pos < f->stringtab_size,
                 "Index out of string pool!");
     return &f->string_ptr[pos];
 }
 
 /* Gets a name for a public symbol */
-char* get_public_name(bytefile* f, int i) {
+static inline char* get_public_name(bytefile* f, int i) {
     return get_string(f, f->public_ptr[i * 2]);
 }
 
 /* Gets an offset for a publie symbol */
-int get_public_offset(bytefile* f, int i) { return f->public_ptr[i * 2 + 1]; }
+static inline int get_public_offset(bytefile* f, int i) { return f->public_ptr[i * 2 + 1]; }
 
 /* Reads a binary bytecode file by name and unpacks it */
-bytefile* read_file(char* fname) {
+static bytefile* read_file(char* fname) {
     FILE* f = fopen(fname, "rb");
     long size;
     bytefile* file;
@@ -86,9 +86,7 @@ bytefile* read_file(char* fname) {
         &file->buffer[file->public_symbols_number * 2 * sizeof(int)];
     file->public_ptr = (int*)file->buffer;
     file->code_ptr = &file->string_ptr[file->stringtab_size];
-    file->global_ptr = (int*)malloc(file->global_area_size * sizeof(int));
-
-    return file;
+       return file;
 }
 
 // variables needed for gc linkage
@@ -106,7 +104,6 @@ extern void* Belem(void* p, int i);
 extern void* Bsta(void* v, int i, void* x);
 extern int LtagHash(char*);
 extern int Btag(void* d, int t, int n);
-extern void* Lstring(void* p);
 extern int Bstring_patt(void* x, void* y);
 extern int Barray_patt(void* d, int n);
 
@@ -129,7 +126,7 @@ unsigned char* ip;
 // address of current stack frame
 int32_t* fp;
 // call stack bottom pointer
-int32_t* call_stack_bottom;
+const int32_t* call_stack_bottom =  call_stack + STACK_SIZE;
 // call stack top pointer
 int32_t* call_stack_top;
 // start of gc handled memory and operands stack top
@@ -191,12 +188,11 @@ static inline int32_t pop_call() {
 
 void init(int32_t global_area_size) {
     // init GC heap, otherwise GC will fail (all heap pointers are 0)
-    __init();
+    __gc_init();
     __gc_stack_bottom = (size_t)gc_handled_memory + MEM_SIZE;
     globals = (int32_t*)__gc_stack_bottom - global_area_size;
     __gc_stack_top = (size_t)(globals - 1);
 
-    call_stack_bottom = call_stack + STACK_SIZE;
     call_stack_top = call_stack_bottom - 1;
 
     // set boxed values in global area memory
@@ -205,7 +201,7 @@ void init(int32_t global_area_size) {
     }
 }
 
-void update_ip(unsigned char* new_ip) {
+static inline void update_ip(unsigned char* new_ip) {
     ASSERT_TRUE(
         new_ip >= bf->code_ptr && new_ip < eof,
         "IP points out of bytecode area! START_CODE: %d, EOF: %d, IP: %d",
@@ -213,23 +209,21 @@ void update_ip(unsigned char* new_ip) {
     ip = new_ip;
 }
 
-inline static unsigned char next_byte() {
+static inline unsigned char next_byte() {
     ASSERT_TRUE(ip + 1 < eof, "IP points out of bytecode area!");
     return *ip++;
 }
 
-inline static int32_t next_int() {
-    ASSERT_TRUE(ip + sizeof(int) < eof, "IP points out of bytecode area!");
-    return (ip += sizeof(int), *(int*)(ip - sizeof(int)));
+static inline int32_t next_int() {
+    ASSERT_TRUE(ip + sizeof(int32_t) < eof, "IP points out of bytecode area!");
+    return (ip += sizeof(int32_t), *(int32_t*)(ip - sizeof(int32_t)));
 }
-
-#define IS_MAIN (call_stack_top == call_stack_bottom - 1)
 
 /**
  * METHODS FOR HANDLING BYTECODE
  */
 
-inline static void call(void) {
+static inline void call(void) {
     int32_t func_label = next_int();
     int32_t n_args = next_int();
     is_closure = false;
@@ -238,7 +232,7 @@ inline static void call(void) {
     update_ip(bf->code_ptr + func_label);
 }
 
-inline static void begin(int new_n_locs, int new_n_args) {
+static inline void begin(int new_n_locs, int new_n_args) {
     // save frame pointer of callee function
     push_call((int32_t)fp);
     push_call(n_args);
@@ -253,7 +247,7 @@ inline static void begin(int new_n_locs, int new_n_args) {
     }
 }
 
-inline static void tag(void) {
+static inline void tag(void) {
     // for pattern matching: check
     // that sexp has given tag and fields count
     char* tag = STRING;
@@ -263,7 +257,7 @@ inline static void tag(void) {
     push_op(Btag((void*)sexp, tag_hash, BOX(n_field)));
 }
 
-inline static data* get_closure_content(int32_t* p) {
+static inline data* get_closure_content(int32_t* p) {
     data* closure_obj = TO_DATA(p);
     int t = TAG(closure_obj->data_header);
     ASSERT_TRUE(t == CLOSURE_TAG,
@@ -271,12 +265,12 @@ inline static data* get_closure_content(int32_t* p) {
     return closure_obj->contents;
 }
 
-inline static int32_t get_closure_addr(int32_t* p) {
+static inline int32_t get_closure_addr(int32_t* p) {
     return ((int32_t*)get_closure_content(p))[0];
 }
 
 enum { G, L, A, C };
-inline static int32_t* get_addr(int32_t place, int32_t idx) {
+static inline int32_t* get_addr(int32_t place, int32_t idx) {
     ASSERT_TRUE(idx >= 0, "Index less than zero!!");
     switch (place) {
         case G:
@@ -329,7 +323,7 @@ static inline void sta() {
 
 // expired by function `Bclosure` from runtime.c
 // create an object of closure ant put it on stack
-inline static void closure(void) {
+static inline void closure(void) {
     int i, ai;
     data* r;
 
@@ -356,7 +350,7 @@ inline static void closure(void) {
 }
 
 // CALLC
-inline static void call_closure(void) {
+static inline void call_closure(void) {
     int32_t n_args = next_int();
     // closure addr not in code -- it stored in closure object.
     // Stack store count of closure arguments and closure object
@@ -371,7 +365,7 @@ inline static void call_closure(void) {
 // CBEGIN
 // Begin in closure if there has captured variables
 // otherwise closure starts with `BEGIN`
-inline static void begin_closure() {
+static inline void begin_closure() {
     int new_n_args = next_int();
     int new_n_locs = next_int();
     begin(new_n_locs, new_n_args);
@@ -396,7 +390,7 @@ static inline void end() {
         ip = (unsigned char*)pop_call();  // ret addr
     }
 }
-void binop(int32_t operator_code) {
+static inline void binop(int32_t operator_code) {
     int32_t b = pop_op(), a = pop_op();
     a = UNBOX(a), b = UNBOX(b);
     int32_t result = 0;
@@ -533,7 +527,7 @@ enum {
 };
 // H7 OPS
 enum { LREAD, LWRITE, LLENGTH, LSTRING, BARRAY };
-static inline void interpret(FILE* f) {
+static void interpret(FILE* f) {
     init(bf->global_area_size);
     ip = bf->code_ptr;
     do {
@@ -576,7 +570,8 @@ static inline void interpret(FILE* f) {
 
                     case END:
                         end();
-                        if (IS_MAIN) {
+                        //check if is main function
+                        if (call_stack_top == call_stack_bottom - 1) {
                             return;
                         }
                         break;
@@ -722,7 +717,7 @@ stop:
 }
 
 int main(int argc, char* argv[]) {
-    if(argc < 2){
+    if (argc < 2) {
         failure("Bad address!");
     }
     bf = read_file(argv[1]);
