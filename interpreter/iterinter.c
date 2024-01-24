@@ -13,6 +13,13 @@
 
 #define STRING get_string(bf, next_int())
 
+//"+", "-", "*", "/", "%", "<", "<=", ">", ">=", "==", "!=", "&&", "!!"
+enum { PLUS, MINUS, MULT, DIV, MOD, LS, LE, GR, GE, EQ, NEQ, AND, OR };
+#define BINOPS(def)                                                            \
+    def(PLUS, +) def(MINUS, -) def(MULT, *) def(DIV, /) def(MOD, %) def(LS, <) \
+        def(LE, <=) def(GR, >) def(GE, >=) def(EQ, ==) def(NEQ, !=)            \
+            def(AND, &&) def(OR, ||)
+
 // end of bytefile
 unsigned char* eof;
 
@@ -292,23 +299,23 @@ inline static int32_t* get_addr(int32_t place, int32_t idx) {
     }
 }
 
-static inline void LD(int32_t place_type, int idx) {
+static inline void ld(int32_t place_type, int idx) {
     int32_t* place = get_addr(place_type, idx);
     push_op(*place);
 }
 
-static inline void LDA(int32_t place_type, int idx) {
+static inline void lda(int32_t place_type, int idx) {
     int32_t* place = get_addr(place_type, idx);
     push_op((int32_t)place);
 }
 
-static inline void ST(int32_t place_type, int idx) {
+static inline void st(int32_t place_type, int idx) {
     int32_t value = peek_op();
     int32_t* place = get_addr(place_type, idx);
     *place = value;
 }
 
-static inline void STA() {
+static inline void sta() {
     int32_t value = pop_op();
     int32_t dest = pop_op();
     if (UNBOXED(dest)) {
@@ -389,51 +396,19 @@ static inline void end() {
         ip = (unsigned char*)pop_call();  // ret addr
     }
 }
-//"+", "-", "*", "/", "%", "<", "<=", ">", ">=", "==", "!=", "&&", "!!"
 void binop(int32_t operator_code) {
     int32_t b = pop_op(), a = pop_op();
     a = UNBOX(a), b = UNBOX(b);
     int32_t result = 0;
     switch (operator_code) {
-        case (0):
-            result = a + b;
-            break;
-        case (1):
-            result = a - b;
-            break;
-        case (2):
-            result = a * b;
-            break;
-        case (3):
-            result = a / b;
-            break;
-        case (4):
-            result = a % b;
-            break;
-        case (5):
-            result = a < b;
-            break;
-        case (6):
-            result = a <= b;
-            break;
-        case (7):
-            result = a > b;
-            break;
-        case (8):
-            result = a >= b;
-            break;
-        case (9):
-            result = a == b;
-            break;
-        case (10):
-            result = a != b;
-            break;
-        case (11):
-            result = a && b;
-            break;
-        case (12):
-            result = a || b;
-            break;
+#define IMPLEMENT_BINOP(n, op) \
+    case n:                    \
+        result = a op b;       \
+        break;
+
+        BINOPS(IMPLEMENT_BINOP)
+
+#undef IMPLEMENT_BINOP
         default:
             failure("Unknown binop operand code: %d", operator_code);
     }
@@ -538,8 +513,27 @@ static inline void array(void) {
     push_op(Barray_patt((void*)actual_obj, array_size));
 }
 
+// outer switch
+enum { BINOP, H1_OPS, LD, LDA, ST, H5_OPS, PATT, H7_OPS };
+// H1 OPS
+enum { CONST, BSTRING, BSEXP, STI, STA, JMP, END, RET, DROP, DUP, SWAP, ELEM };
+// H5 OPS
+enum {
+    CJMPZ,
+    CJMPNZ,
+    BEGIN,
+    CBEGIN,
+    BCLOSURE,
+    CALLC,
+    CALL,
+    TAG,
+    ARRAY_KEY,
+    FAIL,
+    LINE
+};
+// H7 OPS
+enum { LREAD, LWRITE, LLENGTH, LSTRING, BARRAY };
 static inline void interpret(FILE* f) {
-#define FAIL failure("ERROR: invalid opcode %d-%d\n", h, l)
     init(bf->global_area_size);
     ip = bf->code_ptr;
     do {
@@ -549,81 +543,81 @@ static inline void interpret(FILE* f) {
             case 15:
                 goto stop;
 
-            case 0:
+            case BINOP:
                 binop(l - 1);
                 break;
-            case 1:
+            case H1_OPS:
                 switch (l) {
-                    case 0:  // CONST
+                    case CONST:
                         push_op(BOX(next_int()));
                         break;
 
-                    case 1: {
+                    case BSTRING: {
                         char* string_in_pool = STRING;
                         push_op((int32_t)Bstring(string_in_pool));
                         break;
                     }
-                    case 2:
+                    case BSEXP:
                         call_bsexp();
                         break;
 
-                    case 3:
+                    case STI:
                         failure("Untested operation STI");
 
-                    case 4:
-                        STA();
+                    case STA:
+                        sta();
                         break;
 
-                    case 5: {  // JMP
+                    case JMP: {  // JMP
                         int x = next_int();
                         update_ip(bf->code_ptr + x);
                         break;
                     }
 
-                    case 6:
+                    case END:
                         end();
                         if (IS_MAIN) {
                             return;
                         }
                         break;
-                    case 7:
+                    case RET:
                         failure("Untested operation RET");
 
-                    case 8:  // DROP
+                    case DROP:
                         pop_op();
                         break;
 
-                    case 9:  // DUP
+                    case DUP:
                         push_op(peek_op());
                         break;
 
-                    case 10:
+                    case SWAP:
                         failure("Untested operation SWAP");
 
-                    case 11: {  // ELEM
+                    case ELEM: {  // ELEM
                         int32_t idx = pop_op();
                         int32_t array = pop_op();
                         push_op((int32_t)Belem((char*)array, idx));
                         break;
                     }
                     default:
-                        FAIL;
+                        failure("ERROR: invalid opcode %d-%d\n", h, l);
                 }
                 break;
 
-            case 2:
-                LD(l, next_int());
+            case LD:
+                ld(l, next_int());
                 break;
-            case 3:
-                LDA(l, next_int());
+            case LDA:
+                lda(l, next_int());
                 break;
-            case 4:
-                ST(l, next_int());
+            case ST:
+                st(l, next_int());
                 break;
 
-            case 5:
+            case H5_OPS:
                 switch (l) {
-                    case 0: {  // CJMPz
+                    case CJMPZ: {
                         int x = next_int();
                         if (!UNBOX(pop_op())) {
                             update_ip(bf->code_ptr + x);
@@ -631,7 +625,7 @@ static inline void interpret(FILE* f) {
                         break;
                     }
 
-                    case 1: {  // CJMPnz
+                    case CJMPNZ: {  // CJMPnz
                         int x = next_int();
                         if (UNBOX(pop_op())) {
                             update_ip(bf->code_ptr + x);
@@ -639,87 +633,88 @@ static inline void interpret(FILE* f) {
                         break;
                     }
 
-                    case 2: {
+                    case BEGIN: {
                         int n_args = next_int();
                         int n_locs = next_int();
                         begin(n_locs, n_args);
                         break;
                     }
 
-                    case 3:
+                    case CBEGIN:
                         begin_closure();
                         break;
 
-                    case 4:
+                    case BCLOSURE:
                         closure();
                         break;
 
-                    case 5:
+                    case CALLC:
                         call_closure();
                         break;
-                    case 6:
+                    case CALL:
                         call();
                         break;
-                    case 7:
+                    case TAG:
                         tag();
                         break;
-                    case 8:
+                    case ARRAY_KEY:
                         array();
                         break;
 
-                    case 9: {  // FAIL
+                    case FAIL: {
                         int32_t line = next_int();
                         int32_t col = next_byte();
                         failure("\nFAIL at \t%d:%d", line, col);
                     }
 
-                    case 10:  // LINE -- helper information about source code
+                    /*information about source code line*/
+                    case LINE:
                         next_int();
                         break;
 
                     default:
-                        FAIL;
+                        failure("ERROR: invalid opcode %d-%d\n", h, l);
                 }
                 break;
 
-            case 6:
+            case PATT:
                 patt(l);
                 break;
 
-            case 7: {
+            case H7_OPS: {
                 switch (l) {
-                    case 0: {
+                    case LREAD: {
                         // read make it BOX itself
                         int32_t value = Lread();
                         push_op(value);
                         break;
                     }
 
-                    case 1: {
+                    case LWRITE: {
                         int32_t value = pop_op();
                         value = Lwrite(value);
                         push_op(value);
                     } break;
 
-                    case 2:
+                    case LLENGTH:
                         push_op(Llength((char*)pop_op()));
                         break;
 
-                    case 3:
+                    case LSTRING:
                         push_op((int32_t)Lstring((char*)pop_op()));
                         break;
 
-                    case 4:
+                    case BARRAY:
                         call_barray();
                         break;
 
                     default:
-                        FAIL;
+                        failure("ERROR: invalid opcode %d-%d\n", h, l);
                 }
             } break;
 
             default:
-                FAIL;
+                failure("ERROR: invalid opcode %d-%d\n", h, l);
         }
     } while (1);
 stop:
@@ -727,6 +722,9 @@ stop:
 }
 
 int main(int argc, char* argv[]) {
+    if(argc < 2){
+        failure("Bad address!");
+    }
     bf = read_file(argv[1]);
     interpret(stdout);
     return 0;

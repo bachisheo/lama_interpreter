@@ -12,7 +12,6 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <ios>
 
 // end of bytefile
 unsigned char* eof;
@@ -188,64 +187,97 @@ struct freq_counter {
         do {
             char x = next_byte(), h = (x & 0xF0) >> 4, l = x & 0x0F;
 
+            // outer switch
+            enum { BINOP, H1_OPS, LD, LDA, ST, H5_OPS, PATT, H7_OPS };
+            // H1 OPS
+            enum {
+                CONST,
+                BSTRING,
+                BSEXP,
+                STI,
+                STA,
+                JMP,
+                END,
+                RET,
+                DROP,
+                DUP,
+                SWAP,
+                ELEM
+            };
+            // H5 OPS
+            enum {
+                CJMPZ,
+                CJMPNZ,
+                BEGIN,
+                CBEGIN,
+                BCLOSURE,
+                CALLC,
+                CALL,
+                TAG,
+                ARRAY_KEY,
+                FAIL,
+                LINE
+            };
+            // H7 OPS
+            enum { LREAD, LWRITE, LLENGTH, LSTRING, BARRAY };
+
             switch (h) {
                 case 15:
                     return;
 
-                /* BINOP */
-                case 0: {
+                case BINOP: {
                     inc("BINOP", ops[l - 1]);
                     break;
                 }
 
-                case 1:
+                case H1_OPS:
                     switch (l) {
-                        case 0:
+                        case CONST:
                             inc("CONST", next_int());
                             break;
 
-                        case 1:
+                        case BSTRING:
                             inc("STRING", STRING);
                             break;
 
-                        case 2:
+                        case BSEXP:
                             inc("SEXP",
                                 STRING + arg_sep + std::to_string(next_int()));
                             break;
 
-                        case 3:
+                        case STI:
                             inc("STI");
                             break;
 
-                        case 4:
+                        case STA:
                             inc("STA");
                             break;
 
-                        case 5:
+                        case JMP:
                             inc("JMP", next_int());
                             break;
 
-                        case 6:
+                        case END:
                             inc("END");
                             break;
 
-                        case 7:
+                        case RET:
                             inc("RET");
                             break;
 
-                        case 8:
+                        case DROP:
                             inc("DROP");
                             break;
 
-                        case 9:
+                        case DUP:
                             inc("DUP");
                             break;
 
-                        case 10:
+                        case SWAP:
                             inc("SWAP");
                             break;
 
-                        case 11:
+                        case ELEM:
                             inc("ELEM");
                             break;
 
@@ -254,34 +286,34 @@ struct freq_counter {
                     }
                     break;
 
-                case 2:
-                case 3:
-                case 4: {
+                case LD:
+                case LDA:
+                case ST: {
                     std::string place =
                         "(" + plcs[l] + std::to_string(next_int()) + ")";
                     inc(lds[h - 2], place);
                     break;
                 }
 
-                case 5:
+                case H5_OPS:
                     switch (l) {
-                        case 0:
+                        case CJMPZ:
                             inc("CJMPz", int_to_hex(next_int()) + ".8x");
                             break;
 
-                        case 1:
+                        case CJMPNZ:
                             inc("CJMPnz", int_to_hex(next_int()) + ".8x");
                             break;
 
-                        case 2:
+                        case BEGIN:
                             inc("BEGIN", next_int(), next_int());
                             break;
 
-                        case 3:
+                        case CBEGIN:
                             inc("CBEGIN", next_int(), next_int());
                             break;
 
-                        case 4: {
+                        case BCLOSURE: {
                             std::stringstream args;
                             args << next_int();
                             int n = next_int();
@@ -294,28 +326,28 @@ struct freq_counter {
                             break;
                         }
 
-                        case 5:
+                        case CALLC:
                             inc("CALLC", next_int());
                             break;
 
-                        case 6:
+                        case CALL:
                             inc("CALL", next_int(), next_int());
                             break;
 
-                        case 7:
+                        case TAG:
                             inc("TAG ",
                                 STRING + arg_sep + std::to_string(next_int()));
                             break;
 
-                        case 8:
+                        case ARRAY_KEY:
                             inc("ARRAY", next_int());
                             break;
 
-                        case 9:
+                        case FAIL:
                             inc("FAIL", next_int(), next_int());
                             break;
 
-                        case 10:
+                        case LINE:
                             inc("LINE", next_int());
                             break;
 
@@ -324,30 +356,30 @@ struct freq_counter {
                     }
                     break;
 
-                case 6:
+                case PATT:
                     inc("PATT", pats[l]);
                     break;
 
-                case 7: {
+                case H7_OPS: {
                     std::string code = "CALL";
                     switch (l) {
-                        case 0:
+                        case LREAD:
                             inc(code, "Lread");
                             break;
 
-                        case 1:
+                        case LWRITE:
                             inc(code, "Lwrite");
                             break;
 
-                        case 2:
+                        case LLENGTH:
                             inc(code, "Llength");
                             break;
 
-                        case 3:
+                        case LSTRING:
                             inc(code, "Lstring");
                             break;
 
-                        case 4:
+                        case BARRAY:
                             inc(code, "Barray" + arg_sep +
                                           std::to_string(next_int()));
                             break;
@@ -366,6 +398,9 @@ struct freq_counter {
 };
 
 int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        failure("Bad address!");
+    }
     bytefile* bf = read_file(argv[1]);
     freq_counter x(bf);
     x.print_frequency();
