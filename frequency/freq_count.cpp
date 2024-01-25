@@ -142,7 +142,8 @@ struct byte_reader {
 #define INT next_int()
 #define BYTE next_byte()
 #define STRING get_string(INT)
-#define FAIL failure("ERROR: invalid opcode %d-%d\n", h, l)
+#define FAIL_CODE failure("ERROR: invalid opcode %d-%d\n", h, l)
+#define STOP 15
 
         const char* ops[] = {"+", "-",  "*",  "/",  "%",  "<", "<=",
                              ">", ">=", "==", "!=", "&&", "!!"};
@@ -150,76 +151,112 @@ struct byte_reader {
                               "#ref", "#val",    "#fun"};
         const char* lds[] = {"LD", "LDA", "ST"};
         uint8_t x = BYTE, h = (x & 0xF0) >> 4, l = x & 0x0F;
+        // outer switch
+        enum { BINOP, H1_OPS, LD, LDA, ST, H5_OPS, PATT, H7_OPS };
+
+        // H1 OPS
+        enum {
+            CONST,
+            BSTRING,
+            BSEXP,
+            STI,
+            STA,
+            JMP,
+            END,
+            RET,
+            DROP,
+            DUP,
+            SWAP,
+            ELEM
+        };
+
+        // H5 OPS
+        enum {
+            CJMPZ,
+            CJMPNZ,
+            BEGIN,
+            CBEGIN,
+            BCLOSURE,
+            CALLC,
+            CALL,
+            TAG,
+            ARRAY_KEY,
+            FAIL,
+            LINE
+        };
+
+        // H7 OPS
+        enum { LREAD, LWRITE, LLENGTH, LSTRING, BARRAY };
 
         switch (h) {
-            case 15:
+            case STOP:
                 cond_print("STOP");
                 break;
 
             /* BINOP */
-            case 0:
+            case BINOP:
                 cond_print("BINOP\t%s", ops[l - 1]);
                 break;
 
-            case 1:
+            case H1_OPS:
                 switch (l) {
-                    case 0:
+                    case CONST:
                         cond_print("CONST\t%d", INT);
                         break;
 
-                    case 1:
+                    case BSTRING:
                         cond_print("STRING\t%s", STRING);
                         break;
 
-                    case 2:
+                    case BSEXP:
                         cond_print("SEXP\t%s ", STRING);
                         cond_print("%d", INT);
                         break;
 
-                    case 3:
+                    case STI:
                         cond_print("STI");
                         break;
 
-                    case 4:
+                    case STA:
                         cond_print("STA");
                         break;
 
-                    case 5:
+                    case JMP:
                         cond_print("JMP\t0x%.8x", INT);
                         break;
 
-                    case 6:
+                    case END:
                         cond_print("END");
                         break;
 
-                    case 7:
+                    case RET:
                         cond_print("RET");
                         break;
 
-                    case 8:
+                    case DROP:
                         cond_print("DROP");
                         break;
 
-                    case 9:
+                    case DUP:
                         cond_print("DUP");
                         break;
 
-                    case 10:
+                    case SWAP:
                         cond_print("SWAP");
                         break;
 
-                    case 11:
+                    case ELEM:
                         cond_print("ELEM");
                         break;
 
                     default:
-                        FAIL;
+                        FAIL_CODE;
                 }
                 break;
 
-            case 2:
-            case 3:
-            case 4:
+            case LD:
+            case LDA:
+            case ST:
                 cond_print("%s\t", lds[h - 2]);
                 switch (l) {
                     case 0:
@@ -235,31 +272,31 @@ struct byte_reader {
                         cond_print("C(%d)", INT);
                         break;
                     default:
-                        FAIL;
+                        FAIL_CODE;
                 }
                 break;
 
-            case 5:
+            case H5_OPS:
                 switch (l) {
-                    case 0:
+                    case CJMPZ:
                         cond_print("CJMPz\t0x%.8x", INT);
                         break;
 
-                    case 1:
+                    case CJMPNZ:
                         cond_print("CJMPnz\t0x%.8x", INT);
                         break;
 
-                    case 2:
+                    case BEGIN:
                         cond_print("BEGIN\t%d ", INT);
                         cond_print("%d", INT);
                         break;
 
-                    case 3:
+                    case CBEGIN:
                         cond_print("CBEGIN\t%d ", INT);
                         cond_print("%d", INT);
                         break;
 
-                    case 4:
+                    case BCLOSURE:
                         cond_print("CLOSURE\t0x%.8x", INT);
                         {
                             int n = INT;
@@ -278,79 +315,78 @@ struct byte_reader {
                                         cond_print("C(%d)", INT);
                                         break;
                                     default:
-                                        FAIL;
+                                        FAIL_CODE;
                                 }
                             }
                         };
                         break;
 
-                    case 5:
+                    case CALLC:
                         cond_print("CALLC\t%d", INT);
                         break;
 
-                    case 6:
+                    case CALL:
                         cond_print("CALL\t0x%.8x ", INT);
                         cond_print("%d", INT);
                         break;
 
-                    case 7:
+                    case TAG:
                         cond_print("TAG\t%s ", STRING);
                         cond_print("%d", INT);
                         break;
 
-                    case 8:
+                    case ARRAY_KEY:
                         cond_print("ARRAY\t%d", INT);
                         break;
 
-                    case 9:
+                    case FAIL:
                         cond_print("FAIL\t%d", INT);
                         cond_print("%d", INT);
                         break;
 
-                    case 10:
+                    case LINE:
                         cond_print("LINE\t%d", INT);
                         break;
 
                     default:
-                        FAIL;
+                        FAIL_CODE;
                 }
                 break;
 
-            case 6:
+            case PATT:
                 cond_print("PATT\t%s", pats[l]);
                 break;
 
-            case 7: {
+            case H7_OPS:
                 switch (l) {
-                    case 0:
+                    case LREAD:
                         cond_print("CALL\tLread");
                         break;
 
-                    case 1:
+                    case LWRITE:
                         cond_print("CALL\tLwrite");
                         break;
 
-                    case 2:
+                    case LLENGTH:
                         cond_print("CALL\tLlength");
                         break;
 
-                    case 3:
+                    case LSTRING:
                         cond_print("CALL\tLstring");
                         break;
 
-                    case 4:
+                    case BARRAY:
                         cond_print("CALL\tBarray\t%d", INT);
                         break;
 
                     default:
-                        FAIL;
+                        FAIL_CODE;
                 }
-            } break;
+                break;
 
             default:
-                FAIL;
+                FAIL_CODE;
         }
-
         return ip;
     }
 };
