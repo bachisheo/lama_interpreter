@@ -4,13 +4,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <iomanip>
 #include <ios>
 #include <iostream>
+#include <map>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 // end of bytefile
@@ -43,6 +44,11 @@ void failure(const char* msg) {
     std::cout << "\nERROR!\n" << msg;
     exit(1);
 }
+
+#define ASSERT_TRUE(condition, msg, ...)                         \
+    do                                                           \
+        if (!(condition)) failure("\n" msg "\n", ##__VA_ARGS__); \
+    while (0)
 
 /* Reads a binary bytecode file by name and unpacks it */
 bytefile* read_file(char* fname) {
@@ -83,318 +89,320 @@ bytefile* read_file(char* fname) {
     return file;
 }
 
-// #include "../lama-v1.20/runtime/runtime.h"
+struct byte_reader {
+    byte_reader(uint8_t* eof, bytefile* bf)
+        : eof(eof), is_print(false), bf(bf) {}
 
-#define STRING std::string(get_string(bf, next_int()))
-#define ASSERT_TRUE(condition, msg, ...)                         \
-    do                                                           \
-        if (!(condition)) failure("\n" msg "\n", ##__VA_ARGS__); \
-    while (0)
+    byte_reader(uint8_t* eof, bytefile* bf, char* buf, size_t buf_size)
+        : eof(eof), is_print(true), bf(bf), buf(buf), buf_size(buf_size) {}
 
-/* Gets a string from a string table by an index */
-const char* get_string(bytefile* f, int pos) {
-    ASSERT_TRUE(pos >= 0 && pos < f->stringtab_size,
-                "Index out of string pool!");
-    return &f->string_ptr[pos];
-}
-
-struct freq_counter {
-    freq_counter(bytefile* bf) : bf(bf) {}
-    void print_frequency() {
-        calculate_codes();
-        std::vector<std::pair<std::string, int>> sorted_codes(codes.begin(),
-                                                              codes.end());
-        std::sort(sorted_codes.begin(), sorted_codes.end(), cmp);
-        for (auto& it : sorted_codes) {
-            std::cout << std::left << std::setw(24) << it.first << "\t"
-                      << it.second << std::endl;
-        }
+    const uint8_t* read_instruction(const uint8_t* ip) {
+        written = 0;
+        this->ip = ip;
+        return read_instruction();
     }
 
+    char* get_str() { return buf; }
+
    private:
-    uint8_t* ip;
     bytefile* bf;
+    uint8_t* eof;
+    size_t buf_size = 0;
+    char* buf = nullptr;
+    bool is_print;
+    const uint8_t* ip;
+    size_t written = 0;
+
+    void cond_print(const char* fmt, ...) {
+        if (!is_print) return;
+        va_list args;
+        va_start(args, fmt);
+        written += vsnprintf(buf + written, buf_size - written, fmt, args);
+    }
+
+    /* Gets a string from a string table by an index */
+    const char* get_string(int pos) {
+        ASSERT_TRUE(unsigned(pos) < unsigned(bf->stringtab_size),
+                    "Index out of string pool!");
+        return &bf->string_ptr[pos];
+    }
 
     int32_t next_int() {
         ASSERT_TRUE(ip + sizeof(int) < eof, "IP points out of bytecode area!");
         return (ip += sizeof(int), *(int*)(ip - sizeof(int)));
     }
+
     unsigned char next_byte() {
         ASSERT_TRUE(ip < eof, "IP points out of bytecode area!");
         return *ip++;
     }
 
-    static bool cmp(const std::pair<std::string, int>& a,
-                    const std::pair<std::string, int>& b) {
-        return a.second > b.second;
-    }
-    std::unordered_map<std::string, int32_t> codes;
-    int h, l;
-    const std::array<std::string, 13> ops = {
-        "+", "-", "*", "/", "%", "<", "<=", ">", ">=", "==", "!=", "&&", "!!"};
-    const std::array<std::string, 7> pats = {
-        "=str", "#string", "#array", "#sexp", "#ref", "#val", "#fun"};
-    const std::array<std::string, 3> lds = {"LD", "LDA", "ST"};
-    const std::array<std::string, 4> plcs = {"G", "L", "A", "C"};
+    /* Disassembles the bytecode */
+    const uint8_t* read_instruction() {
+#define INT next_int()
+#define BYTE next_byte()
+#define STRING get_string(INT)
+#define FAIL failure("ERROR: invalid opcode %d-%d\n", h, l)
 
-    const std::string arg_sep = " ";
+        const char* ops[] = {"+", "-",  "*",  "/",  "%",  "<", "<=",
+                             ">", ">=", "==", "!=", "&&", "!!"};
+        const char* pats[] = {"=str", "#string", "#array", "#sexp",
+                              "#ref", "#val",    "#fun"};
+        const char* lds[] = {"LD", "LDA", "ST"};
+        uint8_t x = BYTE, h = (x & 0xF0) >> 4, l = x & 0x0F;
 
-    const std::string sep = "\t";
+        switch (h) {
+            case 15:
+                cond_print("STOP");
+                break;
 
-    void inc(std::string key) {
-        auto& entry = *(codes.try_emplace(key, 0).first);
-        entry.second++;
-    }
+            /* BINOP */
+            case 0:
+                cond_print("BINOP\t%s", ops[l - 1]);
+                break;
 
-    void inc(std::string code, std::string args) {
-        std::string key = code + sep + args;
-        inc(key);
-    }
+            case 1:
+                switch (l) {
+                    case 0:
+                        cond_print("CONST\t%d", INT);
+                        break;
 
-    void inc(std::string code, int32_t arg) {
-        std::string key = code + sep + std::to_string(arg);
-        inc(key);
-    }
-    void inc(std::string code, int32_t arg1, int32_t arg2) {
-        std::string key =
-            code + sep + std::to_string(arg1) + arg_sep + std::to_string(arg2);
-        inc(key);
-    }
+                    case 1:
+                        cond_print("STRING\t%s", STRING);
+                        break;
 
-    void fail() { failure("ERROR: invalid opcode %d-%d\n", h, l); }
+                    case 2:
+                        cond_print("SEXP\t%s ", STRING);
+                        cond_print("%d", INT);
+                        break;
 
-    template <typename T>
-    std::string int_to_hex(T i) {
-        std::stringstream stream;
-        stream << "0x" << std::setfill('0') << std::setw(sizeof(T) * 2)
-               << std::hex << i;
-        return stream.str();
-    }
-    std::string get_addr_view(char l, int32_t addr) {
-        return plcs[l] + "(" + std::to_string(addr) + ")";
-    }
-    void calculate_codes() {
-        ip = (uint8_t*)bf->code_ptr;
-        do {
-            uint8_t x = next_byte(), h = (x & 0xF0) >> 4, l = x & 0x0F;
+                    case 3:
+                        cond_print("STI");
+                        break;
 
-            // outer switch
-            enum { BINOP, H1_OPS, LD, LDA, ST, H5_OPS, PATT, H7_OPS };
-            // H1 OPS
-            enum {
-                CONST,
-                BSTRING,
-                BSEXP,
-                STI,
-                STA,
-                JMP,
-                END,
-                RET,
-                DROP,
-                DUP,
-                SWAP,
-                ELEM
-            };
-            // H5 OPS
-            enum {
-                CJMPZ,
-                CJMPNZ,
-                BEGIN,
-                CBEGIN,
-                BCLOSURE,
-                CALLC,
-                CALL,
-                TAG,
-                ARRAY_KEY,
-                FAIL,
-                LINE
-            };
-            // H7 OPS
-            enum { LREAD, LWRITE, LLENGTH, LSTRING, BARRAY };
+                    case 4:
+                        cond_print("STA");
+                        break;
 
-            switch (h) {
-                case 15:
-                    return;
+                    case 5:
+                        cond_print("JMP\t0x%.8x", INT);
+                        break;
 
-                case BINOP: {
-                    inc("BINOP", ops[l - 1]);
-                    break;
+                    case 6:
+                        cond_print("END");
+                        break;
+
+                    case 7:
+                        cond_print("RET");
+                        break;
+
+                    case 8:
+                        cond_print("DROP");
+                        break;
+
+                    case 9:
+                        cond_print("DUP");
+                        break;
+
+                    case 10:
+                        cond_print("SWAP");
+                        break;
+
+                    case 11:
+                        cond_print("ELEM");
+                        break;
+
+                    default:
+                        FAIL;
                 }
+                break;
 
-                case H1_OPS:
-                    switch (l) {
-                        case CONST:
-                            inc("CONST", next_int());
-                            break;
+            case 2:
+            case 3:
+            case 4:
+                cond_print("%s\t", lds[h - 2]);
+                switch (l) {
+                    case 0:
+                        cond_print("G(%d)", INT);
+                        break;
+                    case 1:
+                        cond_print("L(%d)", INT);
+                        break;
+                    case 2:
+                        cond_print("A(%d)", INT);
+                        break;
+                    case 3:
+                        cond_print("C(%d)", INT);
+                        break;
+                    default:
+                        FAIL;
+                }
+                break;
 
-                        case BSTRING:
-                            inc("STRING", STRING);
-                            break;
+            case 5:
+                switch (l) {
+                    case 0:
+                        cond_print("CJMPz\t0x%.8x", INT);
+                        break;
 
-                        case BSEXP: {
-                            std::string name = STRING;
-                            int32_t args = next_int();
-                            inc("SEXP ", name + arg_sep + std::to_string(args));
-                            break;
-                        }
+                    case 1:
+                        cond_print("CJMPnz\t0x%.8x", INT);
+                        break;
 
-                        case STI:
-                            inc("STI");
-                            break;
+                    case 2:
+                        cond_print("BEGIN\t%d ", INT);
+                        cond_print("%d", INT);
+                        break;
 
-                        case STA:
-                            inc("STA");
-                            break;
+                    case 3:
+                        cond_print("CBEGIN\t%d ", INT);
+                        cond_print("%d", INT);
+                        break;
 
-                        case JMP:
-                            inc("JMP", int_to_hex(next_int()));
-                            break;
-
-                        case END:
-                            inc("END");
-                            break;
-
-                        case RET:
-                            inc("RET");
-                            break;
-
-                        case DROP:
-                            inc("DROP");
-                            break;
-
-                        case DUP:
-                            inc("DUP");
-                            break;
-
-                        case SWAP:
-                            inc("SWAP");
-                            break;
-
-                        case ELEM:
-                            inc("ELEM");
-                            break;
-
-                        default:
-                            fail();
-                    }
-                    break;
-
-                case LD:
-                case LDA:
-                case ST:
-                    inc(lds[h - 2], get_addr_view(l, next_int()));
-                    break;
-
-                case H5_OPS:
-                    switch (l) {
-                        case CJMPZ:
-                            inc("CJMPz", int_to_hex(next_int()));
-                            break;
-
-                        case CJMPNZ:
-                            inc("CJMPnz", int_to_hex(next_int()));
-                            break;
-
-                        case BEGIN: {
-                            int n_args = next_int();
-                            int n_locs = next_int();
-                            inc("BEGIN", n_args, n_locs);
-                            break;
-                        }
-
-                        case CBEGIN:
-                            inc("CBEGIN", next_int(), next_int());
-                            break;
-
-                        case BCLOSURE: {
-                            std::stringstream args;
-                            args << next_int();
-                            int n = next_int();
+                    case 4:
+                        cond_print("CLOSURE\t0x%.8x", INT);
+                        {
+                            int n = INT;
                             for (int i = 0; i < n; i++) {
-                                unsigned char byte = next_byte();
-                                args << arg_sep
-                                     << get_addr_view(byte, next_int());
+                                switch (BYTE) {
+                                    case 0:
+                                        cond_print("G(%d)", INT);
+                                        break;
+                                    case 1:
+                                        cond_print("L(%d)", INT);
+                                        break;
+                                    case 2:
+                                        cond_print("A(%d)", INT);
+                                        break;
+                                    case 3:
+                                        cond_print("C(%d)", INT);
+                                        break;
+                                    default:
+                                        FAIL;
+                                }
                             }
-                            inc("CLOSURE", args.str());
-                            break;
-                        }
+                        };
+                        break;
 
-                        case CALLC:
-                            inc("CALLC", next_int());
-                            break;
+                    case 5:
+                        cond_print("CALLC\t%d", INT);
+                        break;
 
-                        case CALL: {
-                            std::string addr = int_to_hex(next_int());
-                            inc("CALL",
-                                addr + arg_sep + std::to_string(next_int()));
-                            break;
-                        }
+                    case 6:
+                        cond_print("CALL\t0x%.8x ", INT);
+                        cond_print("%d", INT);
+                        break;
 
-                        case TAG: {
-                            std::string name = STRING;
-                            int32_t args = next_int();
-                            inc("TAG ", name + arg_sep + std::to_string(args));
-                            break;
-                        }
+                    case 7:
+                        cond_print("TAG\t%s ", STRING);
+                        cond_print("%d", INT);
+                        break;
 
-                        case ARRAY_KEY:
-                            inc("ARRAY", next_int());
-                            break;
+                    case 8:
+                        cond_print("ARRAY\t%d", INT);
+                        break;
 
-                        case FAIL: {
-                            int line = next_int();
-                            int col = next_int();
-                            inc("FAIL", line, col);
-                            break;
-                        }
+                    case 9:
+                        cond_print("FAIL\t%d", INT);
+                        cond_print("%d", INT);
+                        break;
 
-                        case LINE:
-                            inc("LINE", next_int());
-                            break;
+                    case 10:
+                        cond_print("LINE\t%d", INT);
+                        break;
 
-                        default:
-                            fail();
-                    }
-                    break;
+                    default:
+                        FAIL;
+                }
+                break;
 
-                case PATT:
-                    inc("PATT", pats[l]);
-                    break;
+            case 6:
+                cond_print("PATT\t%s", pats[l]);
+                break;
 
-                case H7_OPS: {
-                    std::string code = "CALL";
-                    switch (l) {
-                        case LREAD:
-                            inc(code, "Lread");
-                            break;
+            case 7: {
+                switch (l) {
+                    case 0:
+                        cond_print("CALL\tLread");
+                        break;
 
-                        case LWRITE:
-                            inc(code, "Lwrite");
-                            break;
+                    case 1:
+                        cond_print("CALL\tLwrite");
+                        break;
 
-                        case LLENGTH:
-                            inc(code, "Llength");
-                            break;
+                    case 2:
+                        cond_print("CALL\tLlength");
+                        break;
 
-                        case LSTRING:
-                            inc(code, "Lstring");
-                            break;
+                    case 3:
+                        cond_print("CALL\tLstring");
+                        break;
 
-                        case BARRAY:
-                            inc(code, "Barray" + arg_sep +
-                                          std::to_string(next_int()));
-                            break;
+                    case 4:
+                        cond_print("CALL\tBarray\t%d", INT);
+                        break;
 
-                        default:
-                            fail();
-                    }
-                } break;
+                    default:
+                        FAIL;
+                }
+            } break;
 
-                default:
-                    fail();
-            }
+            default:
+                FAIL;
+        }
 
-        } while (1);
+        return ip;
+    }
+};
+
+struct instruction {
+    instruction(const uint8_t* start, const uint8_t* end)
+        : begin(start), end(end) {}
+
+    bool operator<(instruction other) const {
+        auto res = memcmp(begin, other.begin, end - begin);
+        return res < 0;
+    }
+
+    const uint8_t* get_begin() { return begin; }
+
+   private:
+    const uint8_t* begin;
+    const uint8_t* end;
+};
+
+struct freq_counter {
+    freq_counter(bytefile* bf) : bf(bf) {}
+    void print_frequency() {
+        calculate_codes();
+        std::vector<std::pair<instruction, int>> sorted_codes(codes.begin(),
+                                                              codes.end());
+        std::sort(sorted_codes.begin(), sorted_codes.end(),
+                  [](auto& a, auto& b) { return a.second > b.second; });
+        const size_t buf_size = 1024;
+        char buf[buf_size];
+        byte_reader br(eof, bf, buf, buf_size);
+        for (auto& it : sorted_codes) {
+            br.read_instruction(it.first.get_begin());
+            std::cout << std::left << std::setw(24) << br.get_str() << "\t"
+                      << it.second << std::endl;
+        }
+    }
+
+   private:
+    bytefile* bf;
+    std::map<instruction, int32_t> codes;
+
+    void calculate_codes() {
+        const uint8_t* ip = bf->code_ptr;
+
+        byte_reader br(eof, bf);
+        while (ip < eof) {
+            const uint8_t* insn_end = br.read_instruction(ip);
+            instruction i(ip, insn_end);
+            ip = insn_end;
+            codes.try_emplace(i, 0).first->second++;
+        }
     }
 };
 
